@@ -3606,6 +3606,52 @@ TEST_F(VulkanRenderDeviceUVETest, BindlessCapabilityAndResourcePublicationAreCon
               kInvalidBindlessResourceSlotUVE);
 }
 
+TEST_F(VulkanRenderDeviceUVETest, ForcedDescriptorIndexingFallbackNeverPublishesNativeSlots) {
+    // The normal device path may legitimately enable B1 on a capable driver, so this test uses
+    // the construction policy switch to exercise the opposite branch on that same driver. This
+    // proves fallback selection happens before feature enabling and that callers cannot observe
+    // native slots after the table was intentionally refused.
+    if (windowManager == nullptr) {
+        GTEST_SKIP() << "the current fixture is using a headless-only device; the local Vulkan "
+                        "driver does not expose a second construction surface for the forced "
+                        "fallback comparison";
+    }
+
+    VulkanRenderDeviceOptionsUVE options{};
+    options.forceDisableDescriptorIndexing = true;
+    std::unique_ptr<VulkanRenderDeviceUVE> fallbackDevice =
+        VulkanRenderDeviceUVE::CreateUVE(*windowManager, options);
+    ASSERT_NE(fallbackDevice, nullptr)
+        << "the forced fallback device must initialize on the same Vulkan driver";
+    const RenderDeviceCapabilitiesUVE capabilities = fallbackDevice->GetCapabilitiesUVE();
+    EXPECT_FALSE(capabilities.supportsBindlessResources);
+    EXPECT_FALSE(capabilities.supportsDescriptorIndexing);
+    EXPECT_EQ(capabilities.maxSampledTextures, 0U);
+    EXPECT_EQ(capabilities.maxStorageImages, 0U);
+    EXPECT_EQ(capabilities.maxStorageBuffers, 0U);
+
+    TextureDescUVE textureDesc{};
+    textureDesc.width = 1U;
+    textureDesc.height = 1U;
+    const TextureHandleUVE texture = fallbackDevice->CreateTextureUVE(textureDesc);
+    ASSERT_NE(texture, kInvalidTextureHandleUVE);
+    BufferDescUVE bufferDesc{};
+    bufferDesc.sizeBytes = 16U;
+    bufferDesc.usage = BufferUsageUVE::Storage;
+    const BufferHandleUVE buffer = fallbackDevice->CreateBufferUVE(bufferDesc);
+    ASSERT_NE(buffer, kInvalidBufferHandleUVE);
+
+    EXPECT_EQ(fallbackDevice->GetBindlessSampledTextureSlotUVE(texture),
+              kInvalidBindlessResourceSlotUVE);
+    EXPECT_EQ(fallbackDevice->GetBindlessStorageTextureSlotUVE(texture),
+              kInvalidBindlessResourceSlotUVE);
+    EXPECT_EQ(fallbackDevice->GetBindlessStorageBufferSlotUVE(buffer),
+              kInvalidBindlessResourceSlotUVE);
+
+    fallbackDevice->DestroyTextureUVE(texture);
+    fallbackDevice->DestroyBufferUVE(buffer);
+}
+
 TEST_F(VulkanRenderDeviceUVETest, DepthTextureInStorageSlotFallsBackToSinkAndFrameSurvives) {
     // The M5b depth-in-storage-slot contract: imageStore into a DEPTH image is refused by
     // design, so binding a Depth32Float texture to a storage-image slot deterministically

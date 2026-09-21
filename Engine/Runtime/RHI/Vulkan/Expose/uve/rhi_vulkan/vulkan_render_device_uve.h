@@ -180,6 +180,15 @@
 
 namespace UVE::Render {
 
+/// Construction-time policy switches for the optional Vulkan feature tiers. The default keeps
+/// automatic capability negotiation; forcing descriptor indexing off is useful for driver
+/// workarounds, reproducible fallback tests, and comparing the bounded tuple path against the
+/// native bindless path on the same physical device. This never pretends native bindless is
+/// available: the capability snapshot and every GetBindless*SlotUVE query remain fallback-safe.
+struct VulkanRenderDeviceOptionsUVE final {
+    bool forceDisableDescriptorIndexing = false;
+};
+
 /// Vulkan M1 bootstrap device; see the file banner above for the full scope contract.
 /// Thread-safety: not thread-safe, matching IRenderDeviceUVE's own documented contract; every
 /// method is intended to be called only from the main engine/render thread.
@@ -206,7 +215,12 @@ public:
     /// surface/swapchain are all owned by the returned device and destroyed in strict LIFO
     /// order from its destructor, while windowManager's window is still alive.
     [[nodiscard]] static std::unique_ptr<VulkanRenderDeviceUVE> CreateUVE(
-        Window::IWindowManagerUVE& windowManager);
+        Window::IWindowManagerUVE& windowManager,
+        const VulkanRenderDeviceOptionsUVE& options = {});
+
+    /// `options.forceDisableDescriptorIndexing` is intentionally applied before logical-device
+    /// feature enabling. It therefore exercises the exact production fallback path rather than
+    /// merely hiding the capability bit after a native table has already been created.
 
     /// Same factory contract as the window-manager overload above (nullptr on any host-level
     /// failure, never throws), but takes the surface capability *directly* — for Vulkan
@@ -218,7 +232,8 @@ public:
     /// pickup, swapchain, present loop) is identical, because the window-manager path funnels
     /// through this same bridge on entry. `surfaceBridge` must outlive the returned device.
     [[nodiscard]] static std::unique_ptr<VulkanRenderDeviceUVE> CreateFromBridgeUVE(
-        Window::IVulkanWindowSurfaceUVE& surfaceBridge);
+        Window::IVulkanWindowSurfaceUVE& surfaceBridge,
+        const VulkanRenderDeviceOptionsUVE& options = {});
 
     /// Fully self-contained headless construction: the device itself requests
     /// VK_EXT_headless_surface, creates its own VkHeadlessSurfaceEXT, and sizes the swapchain
@@ -230,7 +245,8 @@ public:
     /// and present path itself is identical to the windowed one — only surface provenance
     /// and extent reporting differ. Failure policy is unchanged: nullptr on any host-level
     /// failure, never throws.
-    [[nodiscard]] static std::unique_ptr<VulkanRenderDeviceUVE> CreateHeadlessUVE();
+    [[nodiscard]] static std::unique_ptr<VulkanRenderDeviceUVE> CreateHeadlessUVE(
+        const VulkanRenderDeviceOptionsUVE& options = {});
 
     ~VulkanRenderDeviceUVE() override;
 
@@ -306,7 +322,8 @@ private:
     [[nodiscard]] bool CreateFallbackTextureUVE();
 
     VulkanRenderDeviceUVE(Window::IWindowManagerUVE* windowManager,
-                          Window::IVulkanWindowSurfaceUVE* bridge);
+                          Window::IVulkanWindowSurfaceUVE* bridge,
+                          const VulkanRenderDeviceOptionsUVE& options);
 
     /// Replays one submitted recorded command buffer inside the frame render pass (see the
     /// .cpp for the M2a integration contract).

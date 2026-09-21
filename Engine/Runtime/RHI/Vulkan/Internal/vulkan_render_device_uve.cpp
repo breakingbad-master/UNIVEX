@@ -145,11 +145,14 @@ struct SamplerSlotRefUVE {
 } // namespace
 
 struct VulkanRenderDeviceUVE::ImplUVE {
-    ImplUVE(Window::IWindowManagerUVE* windowManagerIn, Window::IVulkanWindowSurfaceUVE* bridgeIn)
-        : windowManager(windowManagerIn), bridge(bridgeIn) {}
+    ImplUVE(Window::IWindowManagerUVE* windowManagerIn,
+            Window::IVulkanWindowSurfaceUVE* bridgeIn,
+            const VulkanRenderDeviceOptionsUVE& optionsIn)
+        : windowManager(windowManagerIn), bridge(bridgeIn), options(optionsIn) {}
 
     Window::IWindowManagerUVE* windowManager; // nullable: bridge-direct ("headless") construction
     Window::IVulkanWindowSurfaceUVE* bridge = nullptr;
+    VulkanRenderDeviceOptionsUVE options{};
 
     VkFunctionsUVE vk;
 
@@ -1435,13 +1438,15 @@ bool VulkanRenderDeviceUVE::ImplUVE::InitializeUVE() {
                 nativeDescriptorCount &&
             static_cast<std::uint64_t>(deviceProperties.limits.maxPerStageResources) >=
                 nativeDescriptorCount * 3U;
-        descriptorIndexingSupported =
+        const bool descriptorIndexingPrerequisites =
             availableV12Features.descriptorIndexing == VK_TRUE &&
             availableV12Features.shaderSampledImageArrayNonUniformIndexing == VK_TRUE &&
             availableV12Features.shaderStorageImageArrayNonUniformIndexing == VK_TRUE &&
             availableV12Features.shaderStorageBufferArrayNonUniformIndexing == VK_TRUE &&
             availableV12Features.descriptorBindingPartiallyBound == VK_TRUE &&
             descriptorLimits;
+        descriptorIndexingSupported = !options.forceDisableDescriptorIndexing &&
+                                      descriptorIndexingPrerequisites;
     } else if (apiVersion >= VK_API_VERSION_1_3 && vk.vkGetPhysicalDeviceFeatures2 != nullptr) {
         // Defensive fallback for unusual loaders that report 1.3 but reject a 1.2 query
         // structure.  The normal path above always covers 1.3 because Vulkan 1.3 includes 1.2.
@@ -1452,7 +1457,10 @@ bool VulkanRenderDeviceUVE::ImplUVE::InitializeUVE() {
         vk.vkGetPhysicalDeviceFeatures2(physicalDevice, &features2);
         dynamicRenderingSupported = availableV13Features.dynamicRendering == VK_TRUE;
     }
-    if (!descriptorIndexingSupported) {
+    if (options.forceDisableDescriptorIndexing) {
+        UVE_INFO("VulkanRenderDeviceUVE: descriptor indexing disabled by construction options; "
+                 "using the bounded tuple/fallback binding path");
+    } else if (!descriptorIndexingSupported) {
         UVE_INFO("VulkanRenderDeviceUVE: native descriptor indexing prerequisites are not all "
                  "available; using the bounded tuple/fallback binding path");
     }
@@ -2117,8 +2125,9 @@ void VulkanRenderDeviceUVE::ImplUVE::DestroyAllResourcesUVE() {
 }
 
 VulkanRenderDeviceUVE::VulkanRenderDeviceUVE(Window::IWindowManagerUVE* windowManager,
-                                             Window::IVulkanWindowSurfaceUVE* bridge)
-    : m_impl(std::make_unique<ImplUVE>(windowManager, bridge)) {}
+                                             Window::IVulkanWindowSurfaceUVE* bridge,
+                                             const VulkanRenderDeviceOptionsUVE& options)
+    : m_impl(std::make_unique<ImplUVE>(windowManager, bridge, options)) {}
 
 VulkanRenderDeviceUVE::~VulkanRenderDeviceUVE() {
     if (m_impl->device != VK_NULL_HANDLE) {
@@ -2158,9 +2167,10 @@ VulkanRenderDeviceUVE::~VulkanRenderDeviceUVE() {
 }
 
 std::unique_ptr<VulkanRenderDeviceUVE> VulkanRenderDeviceUVE::CreateUVE(
-    Window::IWindowManagerUVE& windowManager) {
+    Window::IWindowManagerUVE& windowManager,
+    const VulkanRenderDeviceOptionsUVE& options) {
     auto device = std::unique_ptr<VulkanRenderDeviceUVE>(
-        new VulkanRenderDeviceUVE(&windowManager, nullptr));
+        new VulkanRenderDeviceUVE(&windowManager, nullptr, options));
     if (!device->m_impl->InitializeUVE()) {
         // Partially-constructed state is torn down by the destructor — every bail in
         // InitializeUVE() has already logged its own reason.
@@ -2206,9 +2216,10 @@ bool VulkanRenderDeviceUVE::CreateFallbackTextureUVE() {
 }
 
 std::unique_ptr<VulkanRenderDeviceUVE> VulkanRenderDeviceUVE::CreateFromBridgeUVE(
-    Window::IVulkanWindowSurfaceUVE& surfaceBridge) {
+    Window::IVulkanWindowSurfaceUVE& surfaceBridge,
+    const VulkanRenderDeviceOptionsUVE& options) {
     auto device = std::unique_ptr<VulkanRenderDeviceUVE>(
-        new VulkanRenderDeviceUVE(nullptr, &surfaceBridge));
+        new VulkanRenderDeviceUVE(nullptr, &surfaceBridge, options));
     if (!device->m_impl->InitializeUVE()) {
         return nullptr; // partially-initialized state torn down by the destructor
     }
@@ -2218,9 +2229,10 @@ std::unique_ptr<VulkanRenderDeviceUVE> VulkanRenderDeviceUVE::CreateFromBridgeUV
     return device;
 }
 
-std::unique_ptr<VulkanRenderDeviceUVE> VulkanRenderDeviceUVE::CreateHeadlessUVE() {
+std::unique_ptr<VulkanRenderDeviceUVE> VulkanRenderDeviceUVE::CreateHeadlessUVE(
+    const VulkanRenderDeviceOptionsUVE& options) {
     auto device = std::unique_ptr<VulkanRenderDeviceUVE>(
-        new VulkanRenderDeviceUVE(nullptr, nullptr));
+        new VulkanRenderDeviceUVE(nullptr, nullptr, options));
     device->m_impl->headless = true; // InitializeUVE() branches on this at the WSI edges
     if (!device->m_impl->InitializeUVE()) {
         return nullptr; // partially-initialized state torn down by the destructor

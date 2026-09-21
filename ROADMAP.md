@@ -323,7 +323,9 @@ publicly shipping real-time engines as of today, without naming any of them.
   slots;
   set 0 and the existing tuple descriptors remain the fallback/migration path. The shared
   shader convention and artifact documentation are recorded in `Engine/Tools/SHADER_PIPELINE.md`.
-  Remaining evidence is real Vulkan GPU/validation-layer coverage, descriptor-array shader
+  A Vulkan integration test now checks capability-gated slot publication, format restrictions,
+  destruction invalidation, and a construction-time forced fallback on the same driver; CI still
+  needs to execute that test with validation layers. Remaining evidence is descriptor-array shader
   artifacts migrated from built-ins, capacity/performance measurements, and native D3D12
   descriptor heaps plus Metal argument buffers/mobile validation.
 
