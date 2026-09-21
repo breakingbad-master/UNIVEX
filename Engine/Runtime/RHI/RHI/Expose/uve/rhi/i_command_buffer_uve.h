@@ -75,14 +75,14 @@ public:
     virtual void BindUniformBufferUVE(BufferHandleUVE buffer, std::uint32_t slot) = 0;
 
     /// Binds `buffer` as a shader-storage buffer (SSBO) at `slot` for the active pipeline's
-    /// shaders (Vulkan M2f). `slot` mirrors GL's shader-storage binding points: the pipeline's
-    /// i-th reflected storage-buffer binding (sorted ascending) is fed from slot i — the same
-    /// global-slot contract BindTextureUVE uses for samplers. `buffer` must have been created
-    /// with BufferUsageUVE::Storage; backends reject (loudly, no crash) any other usage, and a
-    /// storage binding left unbound resolves to a deterministic all-zero buffer on Vulkan
-    /// (GL's unbound-SSBO reads are undefined; the engine never relies on them). Storage-image
-    /// bindings are deliberately NOT covered here — images land with the compute milestone.
-    /// Must be called inside a render pass.
+    /// shaders (Vulkan M2f). `slot` mirrors GL's shader-storage binding points and is the
+    /// reflected descriptor binding number itself; sparse contracts such as bindings 0 and 2
+    /// therefore remain addressable without compacting the host slots. Dense bindings still use
+    /// slots 0, 1, 2 as usual. `buffer` must have been created with BufferUsageUVE::Storage;
+    /// backends reject (loudly, no crash) any other usage, and a storage binding left unbound
+    /// resolves to a deterministic all-zero buffer on Vulkan (GL's unbound-SSBO reads are
+    /// undefined; the engine never relies on them). Storage-image bindings are deliberately NOT
+    /// covered here — images land with the compute milestone. Must be called inside a render pass.
     virtual void BindStorageBufferUVE(BufferHandleUVE buffer, std::uint32_t slot) = 0;
 
     /// Sets a scalar/vector/matrix uniform on the currently bound pipeline by name (Increment 21

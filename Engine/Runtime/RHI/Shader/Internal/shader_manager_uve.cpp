@@ -122,12 +122,20 @@ namespace {
 }
 
 [[nodiscard]] std::vector<std::pair<std::string, std::string>> BuildDefinesUVE(
-    ShaderStageUVE stage, bool injectDebugDefine, const std::vector<std::pair<std::string, std::string>>& extraDefines) {
+    ShaderStageUVE stage, bool injectDebugDefine, std::string_view backendName,
+    const std::vector<std::pair<std::string, std::string>>& extraDefines) {
     std::vector<std::pair<std::string, std::string>> defines;
-    defines.reserve(extraDefines.size() + 4);
+    defines.reserve(extraDefines.size() + 5);
     defines.emplace_back("UVE_DEBUG", injectDebugDefine ? "1" : "0");
     defines.emplace_back("UVE_MOBILE", "0"); // No mobile backend exists yet - reserved.
-    defines.emplace_back("UVE_BACKEND_GL", "1"); // Reserved for a future non-GL backend to define its own instead.
+    defines.emplace_back("UVE_BACKEND_GL", backendName == "OpenGL" ? "1" : "0");
+    // Source compilation is still required for requests that carry an extra define (for example
+    // the instanced shadow variants), so it must select the same explicit API layout as its
+    // matching cooked Vulkan artifact. Without this define, a Vulkan source fallback would take
+    // the legacy OpenGL default-uniform branch and fail at shader creation.
+    if (backendName.starts_with("Vulkan")) {
+        defines.emplace_back("UVE_VULKAN", "1");
+    }
     defines.emplace_back(ShaderStageDefineNameUVE(stage), "1");
     defines.insert(defines.end(), extraDefines.begin(), extraDefines.end());
     return defines;
@@ -345,7 +353,8 @@ void ShaderManagerUVE::SubmitSourceCompileJobUVE(ImplUVE& impl, const std::share
                 preprocess.fileIndexTable.push_back(cookedArtifact->virtualPath);
             } else {
                 const std::vector<std::pair<std::string, std::string>> defines =
-                    BuildDefinesUVE(desc.stage, impl.config.injectDebugDefineUVE, desc.extraDefines);
+                    BuildDefinesUVE(desc.stage, impl.config.injectDebugDefineUVE,
+                                    impl.renderDevice.GetBackendNameUVE(), desc.extraDefines);
                 preprocess = Detail::PreprocessShaderSourceUVE(
                     impl.fileSystem, desc.virtualFilePath, desc.embeddedFallbackSourceCode, defines);
             }

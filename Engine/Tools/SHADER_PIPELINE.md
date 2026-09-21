@@ -110,7 +110,13 @@ target. ShaderManagerUVE now consumes the cooked artifact when the backend-speci
 cooked variant. The repository CI runs `spirv-val` against Vulkan-semantics modules and validates
 OpenGL-semantics intermediates with the generic SPIR-V validator, plus SPIRV-Cross JSON reflection
 on `bindless_probe.vulkan.spv`. The target covers the four compute built-ins, the deterministic B1
-fixture, the basic/basic-textured/particle graphics materials, and the first post-processing/UI materials.
+fixture, the basic/basic-textured/particle graphics materials, the first post-processing/UI materials,
+and the shadow_depth/lit_shadowed_3d pair. Those shadow shaders use the same authoring source for
+OpenGL default-block uniforms and Vulkan explicit layouts: a set-0/binding-3 std140 UBO contract,
+instanced SSBO bindings 0/2 for depth and 0/1/2 for lit, and separate Vulkan cascade sampler
+bindings 7/8/9 while preserving the OpenGL sampler-array contract. The Vulkan reflection path
+recursively flattens nested block arrays into canonical names such as `uLights[2].position`, with
+reflected std140 offsets and array strides used for the host writes.
 Remaining work is migration of the other graphics shaders, target-native final compiler validation on Windows/D3D12 and
 macOS/iOS/Metal, and hardware coverage. The tool itself is already usable as a reproducible,
 target-aware artifact generator.

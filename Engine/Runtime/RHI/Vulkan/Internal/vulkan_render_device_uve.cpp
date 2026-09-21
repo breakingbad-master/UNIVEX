@@ -29,6 +29,7 @@
 #include <cstdint>
 #include <cstring>
 #include <deque>
+#include <functional>
 #include <map>
 #include <mutex>
 #include <span>
@@ -82,9 +83,9 @@ namespace {
 
 // --- M2b uniform reflection support types (module-internal) --------------------------------
 
-/// One named uniform inside a uniform block or the push-constant block (M2b resolution unit
-/// for SetUniform*): flat top-level members only — nested struct flattening is documented
-/// outside this slice.
+/// One named scalar/vector/matrix leaf inside a uniform block or push-constant block (the
+/// SetUniform* resolution unit). Names are canonical dotted/indexed paths produced by the
+/// recursive reflection walk, for example `uLights[2].position`.
 struct UniformMemberRefUVE {
     std::string name;
     ShaderDataTypeUVE type = ShaderDataTypeUVE::Float;
@@ -126,8 +127,9 @@ struct TextureSlotRefUVE {
     bool isStorageImage = false;
 };
 
-/// One reflected STORAGE_BUFFER binding (M2f): slot semantics mirror the texture slots — the
-/// i-th storage binding (sorted ascending) is fed from BindStorageBufferUVE slot i.
+/// One reflected STORAGE_BUFFER binding (M2f): the descriptor binding is also the logical RHI
+/// slot. Keeping that number explicit permits sparse production layouts such as shadow bindings
+/// 0 and 2 without compacting the host-side BindStorageBufferUVE contract.
 struct StorageSlotRefUVE {
     std::uint32_t binding = 0U;
     std::string name; // reflected block name (diagnostics only; binding is by slot)
@@ -477,7 +479,7 @@ struct VulkanRenderDeviceUVE::ImplUVE {
         std::vector<UniformBlockRefUVE> uniformBlocks;
         PushConstantBlockRefUVE pushBlock;
         std::vector<TextureSlotRefUVE> textureSlots; // sorted by binding (slot index = position)
-        std::vector<StorageSlotRefUVE> storageSlots;  // M2f SSBOs, same slot rule
+        std::vector<StorageSlotRefUVE> storageSlots;  // M2f SSBOs, binding number == logical slot
         std::vector<SamplerSlotRefUVE> samplerBindings; // M2f standalone samplers (fixed sampler)
         std::vector<UniformReflectionUVE> reflectedUniforms; // served by GetPipelineUniformsUVE()
         bool uniformsDirty = true; // first bind of any frame flushes everything
@@ -1966,35 +1968,119 @@ namespace {
     return ShaderDataTypeUVE::Unsupported;
 }
 
-/// Gathers the flat top-level members of one reflected block variable (block-level wrapping
-/// struct), internet into `outMembers` with each member's stage-unknown push/UBO context set
-/// by the caller. Nested-struct members are intentionally skipped for M2b (documented in the
-/// pipeline reflection contract): flat members cover the RHI's whole GL-era uniform shape.
+/// Gathers named scalar/vector/matrix leaves from one reflected block. The original M2b
+/// implementation intentionally stopped at flat members, which was safe for the first primitive
+/// materials but silently dropped real production shapes such as `LightUVE uLights[4]` and
+/// `mat4 uLightSpaceMatrices[3]`. Walk fixed arrays and nested structs here so the
+/// existing SetUniform* name contract can address `uLights[2].position` and
+/// `uLightSpaceMatrices[1]` without adding backend-specific array setters.
 void CollectBlockMembersUVE(const SpvReflectBlockVariable& block, const VkShaderStageFlags stageFlags,
                             const std::int32_t blockIndex, std::vector<UniformMemberRefUVE>& outMembers) {
-    for (std::uint32_t index = 0; index < block.member_count; ++index) {
-        const SpvReflectBlockVariable& member = block.members[index];
-        const char* memberName = member.name != nullptr ? member.name
-            : (member.type_description != nullptr && member.type_description->struct_member_name != nullptr
-                   ? member.type_description->struct_member_name : nullptr);
-        if (memberName == nullptr || memberName[0] == '\0') {
-            continue;
+    const auto memberNameUVE = [](const SpvReflectBlockVariable& member) -> const char* {
+        if (member.name != nullptr && member.name[0] != '\0') {
+            return member.name;
         }
+        if (member.type_description != nullptr && member.type_description->struct_member_name != nullptr &&
+            member.type_description->struct_member_name[0] != '\0') {
+            return member.type_description->struct_member_name;
+        }
+        return nullptr;
+    };
+
+    std::function<void(const SpvReflectBlockVariable&, const std::string&, std::uint32_t)> collect;
+    collect = [&](const SpvReflectBlockVariable& member, const std::string& qualifiedName,
+                  const std::uint32_t memberOffset) {
+        const std::uint32_t dimensions = member.array.dims_count;
+        if (dimensions != 0U) {
+            // Runtime arrays belong to SSBOs and are not uniform members. A zero dimension is
+            // therefore not writable through SetUniform*, so leave it out rather than inventing a
+            // bound that could let a host write past the reflected block. Fixed multidimensional
+            // arrays are uncommon in the current material set, but the recursive index walk keeps
+            // their canonical names and offsets correct too (`uValues[1][2]`). SPIRV-Reflect
+            // reports the outer stride; each inner stride is the outer stride divided by the
+            // remaining fixed dimensions for an OpTypeArray chain.
+            std::vector<std::uint32_t> counts(dimensions);
+            std::vector<std::uint32_t> strides(dimensions);
+            std::uint64_t dimensionProduct = 1U;
+            for (std::uint32_t dimension = 0U; dimension < dimensions; ++dimension) {
+                counts[dimension] = member.array.dims[dimension];
+                if (counts[dimension] == 0U) {
+                    return;
+                }
+                dimensionProduct *= counts[dimension];
+            }
+            const std::uint32_t outerStride = member.array.stride != 0U
+                ? member.array.stride
+                : static_cast<std::uint32_t>(member.padded_size / dimensionProduct);
+            strides[0] = outerStride;
+            for (std::uint32_t dimension = 1U; dimension < dimensions; ++dimension) {
+                strides[dimension] = strides[dimension - 1U] / counts[dimension];
+            }
+
+            const auto collectArrayLeaves = [&](const auto& self, const std::uint32_t dimension,
+                                                const std::string& indexedName,
+                                                const std::uint32_t indexedOffset) -> void {
+                if (dimension < dimensions) {
+                    for (std::uint32_t elementIndex = 0U; elementIndex < counts[dimension]; ++elementIndex) {
+                        self(self, dimension + 1U,
+                             indexedName + "[" + std::to_string(elementIndex) + "]",
+                             indexedOffset + elementIndex * strides[dimension]);
+                    }
+                    return;
+                }
+                if (member.member_count != 0U) {
+                    for (std::uint32_t childIndex = 0U; childIndex < member.member_count; ++childIndex) {
+                        const SpvReflectBlockVariable& child = member.members[childIndex];
+                        const char* childName = memberNameUVE(child);
+                        if (childName == nullptr) {
+                            continue;
+                        }
+                        collect(child, indexedName + "." + childName, indexedOffset + child.offset);
+                    }
+                } else {
+                    const ShaderDataTypeUVE type = ToRhiUniformTypeUVE(member);
+                    if (type == ShaderDataTypeUVE::Unsupported) {
+                        return;
+                    }
+                    outMembers.push_back(UniformMemberRefUVE{
+                        indexedName, type, indexedOffset,
+                        member.padded_size != 0U ? member.padded_size : member.size,
+                        blockIndex, 1U});
+                }
+            };
+            collectArrayLeaves(collectArrayLeaves, 0U, qualifiedName, memberOffset);
+            return;
+        }
+
         if (member.member_count != 0U) {
-            continue; // nested structs: out of the M2b flat-member contract
+            for (std::uint32_t childIndex = 0U; childIndex < member.member_count; ++childIndex) {
+                const SpvReflectBlockVariable& child = member.members[childIndex];
+                const char* childName = memberNameUVE(child);
+                if (childName == nullptr) {
+                    continue;
+                }
+                collect(child, qualifiedName + "." + childName, memberOffset + child.offset);
+            }
+            return;
         }
+
         const ShaderDataTypeUVE type = ToRhiUniformTypeUVE(member);
         if (type == ShaderDataTypeUVE::Unsupported) {
+            return;
+        }
+        outMembers.push_back(UniformMemberRefUVE{
+            qualifiedName, type, memberOffset,
+            member.padded_size != 0U ? member.padded_size : member.size,
+            blockIndex, 1U});
+    };
+
+    for (std::uint32_t index = 0U; index < block.member_count; ++index) {
+        const SpvReflectBlockVariable& member = block.members[index];
+        const char* name = memberNameUVE(member);
+        if (name == nullptr) {
             continue;
         }
-        UniformMemberRefUVE ref;
-        ref.name = memberName;
-        ref.type = type;
-        ref.offset = member.offset;
-        ref.size = member.padded_size != 0U ? member.padded_size : member.size;
-        ref.blockIndex = blockIndex;
-        ref.arraySize = member.array.dims_count != 0U ? member.array.dims[0] : 1U;
-        outMembers.push_back(std::move(ref));
+        collect(member, name, member.absolute_offset);
     }
     (void)stageFlags;
 }
@@ -4370,7 +4456,11 @@ void VulkanRenderDeviceUVE::ReplayRecordedCommandsUVE(const std::vector<Recorded
             tupleStorageRecords.reserve(record.storageSlots.size());
             for (std::size_t slotIndex = 0; slotIndex < record.storageSlots.size(); ++slotIndex) {
                 std::uint32_t value = 0U;
-                const auto bound = currentStorageValues.find(static_cast<std::uint32_t>(slotIndex));
+                // Storage slots are addressed by the logical RHI slot, which is intentionally
+                // the reflected descriptor binding rather than the compact vector index. This
+                // matters for the shadow variant: it uses bindings 0 and 2, while the renderer
+                // still binds the base-index buffer to logical slot 2.
+                const auto bound = currentStorageValues.find(record.storageSlots[slotIndex].binding);
                 if (bound != currentStorageValues.end() &&
                     impl.buffers.find(bound->second) != impl.buffers.end()) {
                     value = bound->second;
@@ -4942,12 +5032,19 @@ void VulkanRenderDeviceUVE::ReplayRecordedCommandsUVE(const std::vector<Recorded
                 } else {
                     currentStorageValues[op.slot] = op.buffer.value;
                     const auto activePipeline = impl.pipelines.find(impl.activePipelineValue);
-                    if (activePipeline != impl.pipelines.end() &&
-                        op.slot >= activePipeline->second.storageSlots.size()) {
-                        impl.WarnOnceUVE(VulkanRenderDeviceUVE::ImplUVE::kWarnedStorageSlotOobUVE,
-                            "submit replay: BindStorageBufferUVE slot exceeds the bound "
-                            "pipeline's reflected storage-buffer count; the bind is recorded "
-                            "(GL binding-point semantics) but no SSBO reads it in this pipeline");
+                    if (activePipeline != impl.pipelines.end()) {
+                        const bool reflectedSlot = std::any_of(
+                            activePipeline->second.storageSlots.begin(),
+                            activePipeline->second.storageSlots.end(),
+                            [slot = op.slot](const StorageSlotRefUVE& reflected) {
+                                return reflected.binding == slot;
+                            });
+                        if (!reflectedSlot) {
+                            impl.WarnOnceUVE(VulkanRenderDeviceUVE::ImplUVE::kWarnedStorageSlotOobUVE,
+                                "submit replay: BindStorageBufferUVE slot is not present in the "
+                                "bound pipeline's reflected storage bindings; the bind is recorded "
+                                "(GL binding-point semantics) but no SSBO reads it in this pipeline");
+                        }
                     }
                 }
             } else if constexpr (std::is_same_v<OpT, SetUniformFloatCommandUVE>) {

@@ -1,41 +1,54 @@
 #version 450 core
 
-#ifdef VERTEX_SHADER
-layout(location = 0) in vec3 aPosition;
-layout(location = 1) in vec3 aNormal;
-layout(location = 2) in vec2 aTexCoord;
-layout(location = 3) in vec4 aTangent;
+// The Vulkan-family branch deliberately uses one std140 frame/material block rather than a large
+// push-constant range. This shader carries four structured lights, material values, and three
+// cascade matrices; a push block that large would exceed the 128-byte minimum guaranteed by Vulkan
+// devices. The RHI reflects nested structs and arrays into the same SetUniform* names used by GL.
+struct LightUVE {
+    int type; // 0 = Directional, 1 = Point, 2 = Spot
+    vec3 position;
+    vec3 direction;
+    vec3 color;
+    float intensity;
+    float range;
+    float spotAngleDegrees;
+};
 
-out vec3 vWorldPosition;
-out vec3 vWorldNormal;
-out vec3 vWorldTangent;
-out float vTangentHandedness;
-out vec2 vTexCoord;
-out vec4 vLightSpacePosition;
-out vec4 vLightSpacePositions[3];
-
-#ifdef UVE_INSTANCED
-// The instanced variant reads its per-object transforms from a storage buffer indexed by
-// gl_InstanceID instead of from a uniform set once per draw. That is the entire difference
-// between the two variants, and it is why this is a #define rather than a second shader file:
-// the 240-odd lines of lighting below are shared verbatim, so an instanced object and a
-// non-instanced one cannot drift apart in how they are lit.
-//
-// Matrices arrive TRANSPOSED from the host (Matrix4x4UVE is row-major; std430 mat4 is
-// column-major), exactly as in mesh_skin.glsl - the same convention, deliberately, so there is
-// one rule to remember rather than two.
-//
-// uInstanceBaseIndex offsets into the frame-wide matrix buffer so every batch can share one
-// upload rather than one buffer each; gl_InstanceID restarts at 0 for each draw.
-layout(std430, binding = 0) readonly buffer InstanceTransformBlock {
-    mat4 instanceModels[];
-};
-layout(std430, binding = 1) readonly buffer InstanceNormalTransformBlock {
-    mat4 instanceNormalModels[];
-};
-layout(std430, binding = 2) readonly buffer InstanceBaseBlock {
-    int uInstanceBaseIndex;
-};
+#ifdef UVE_VULKAN
+layout(std140, set = 0, binding = 3) uniform UveLitShadowedParameters {
+    mat4 uModel;
+    mat4 uNormalMatrix;
+    mat4 uViewProjection;
+    mat4 uLightSpaceMatrix;
+    mat4 uLightSpaceMatrices[3];
+    LightUVE uLights[4];
+    vec3 uAmbientColor;
+    vec3 uViewPosition;
+    vec3 uAlbedoColor;
+    float uMetallic;
+    float uRoughness;
+    vec3 uEmissiveColor;
+    int uShadowPcfKernelRadius;
+    float uShadowCascadeSplits[3];
+    int uShadowCascadeCount;
+    float uShadowCascadeBlendRatio;
+} uveParameters;
+#define uModel uveParameters.uModel
+#define uNormalMatrix uveParameters.uNormalMatrix
+#define uViewProjection uveParameters.uViewProjection
+#define uLightSpaceMatrix uveParameters.uLightSpaceMatrix
+#define uLightSpaceMatrices uveParameters.uLightSpaceMatrices
+#define uLights uveParameters.uLights
+#define uAmbientColor uveParameters.uAmbientColor
+#define uViewPosition uveParameters.uViewPosition
+#define uAlbedoColor uveParameters.uAlbedoColor
+#define uMetallic uveParameters.uMetallic
+#define uRoughness uveParameters.uRoughness
+#define uEmissiveColor uveParameters.uEmissiveColor
+#define uShadowPcfKernelRadius uveParameters.uShadowPcfKernelRadius
+#define uShadowCascadeSplits uveParameters.uShadowCascadeSplits
+#define uShadowCascadeCount uveParameters.uShadowCascadeCount
+#define uShadowCascadeBlendRatio uveParameters.uShadowCascadeBlendRatio
 #else
 uniform mat4 uModel;
 // Transpose(inverse(uModel)): correctly transforms normals under non-uniform scale, unlike
@@ -43,14 +56,97 @@ uniform mat4 uModel;
 // Tangents are still transformed with uModel directly - that IS the correct convention for a
 // surface-parameterization vector, unlike a normal.
 uniform mat4 uNormalMatrix;
-#endif
 uniform mat4 uViewProjection;
 uniform mat4 uLightSpaceMatrix;
 uniform mat4 uLightSpaceMatrices[3];
+uniform LightUVE uLights[4];
+uniform vec3 uAmbientColor;
+uniform vec3 uViewPosition;
+uniform vec3 uAlbedoColor;
+uniform float uMetallic;
+uniform float uRoughness;
+uniform vec3 uEmissiveColor;
+uniform int uShadowPcfKernelRadius;
+uniform float uShadowCascadeSplits[3];
+uniform int uShadowCascadeCount;
+uniform float uShadowCascadeBlendRatio;
+#endif
+
+#ifdef UVE_VULKAN
+layout(set = 0, binding = 4) uniform sampler2D uAlbedoTexture;
+layout(set = 0, binding = 5) uniform sampler2D uNormalTexture;
+layout(set = 0, binding = 6) uniform sampler2D uAOTexture;
+layout(set = 0, binding = 7) uniform sampler2D uShadowMapTextures0;
+layout(set = 0, binding = 8) uniform sampler2D uShadowMapTextures1;
+layout(set = 0, binding = 9) uniform sampler2D uShadowMapTextures2;
+#else
+uniform sampler2D uAlbedoTexture;
+uniform sampler2D uNormalTexture;
+uniform sampler2D uAOTexture;
+// Legacy Increment 27 pair retained for project-authored shaders and direct single-map tests.
+uniform sampler2D uShadowMapTexture;
+uniform sampler2D uShadowMapTextures[3];
+#define uShadowMapTextures0 uShadowMapTextures[0]
+#define uShadowMapTextures1 uShadowMapTextures[1]
+#define uShadowMapTextures2 uShadowMapTextures[2]
+#endif
+
+#ifdef UVE_INSTANCED
+// The instanced variant reads its per-object transforms from storage buffers indexed by the
+// instance index instead of from a uniform set once per draw. The lighting fragment stage remains
+// completely shared between both variants, so an instanced object and a non-instanced one cannot
+// drift apart in how they are lit.
+//
+// Matrices arrive TRANSPOSED from the host (Matrix4x4UVE is row-major; std430 mat4 is
+// column-major), exactly as in mesh_skin.glsl - the same convention, deliberately, so there is
+// one rule to remember rather than two.
+//
+// uInstanceBaseIndex offsets into the frame-wide matrix buffer so every batch can share one upload
+// rather than one buffer each; the Vulkan/OpenGL instance built-in is selected below.
+#ifdef UVE_VULKAN
+layout(std430, set = 0, binding = 0) readonly buffer InstanceTransformBlock {
+#else
+layout(std430, binding = 0) readonly buffer InstanceTransformBlock {
+#endif
+    mat4 instanceModels[];
+};
+#ifdef UVE_VULKAN
+layout(std430, set = 0, binding = 1) readonly buffer InstanceNormalTransformBlock {
+#else
+layout(std430, binding = 1) readonly buffer InstanceNormalTransformBlock {
+#endif
+    mat4 instanceNormalModels[];
+};
+#ifdef UVE_VULKAN
+layout(std430, set = 0, binding = 2) readonly buffer InstanceBaseBlock {
+#else
+layout(std430, binding = 2) readonly buffer InstanceBaseBlock {
+#endif
+    int uInstanceBaseIndex;
+};
+#endif
+
+#ifdef VERTEX_SHADER
+layout(location = 0) in vec3 aPosition;
+layout(location = 1) in vec3 aNormal;
+layout(location = 2) in vec2 aTexCoord;
+layout(location = 3) in vec4 aTangent;
+
+layout(location = 0) out vec3 vWorldPosition;
+layout(location = 1) out vec3 vWorldNormal;
+layout(location = 2) out vec3 vWorldTangent;
+layout(location = 3) out float vTangentHandedness;
+layout(location = 4) out vec2 vTexCoord;
+layout(location = 5) out vec4 vLightSpacePosition;
+layout(location = 6) out vec4 vLightSpacePositions[3];
 
 void main() {
 #ifdef UVE_INSTANCED
+#ifdef UVE_VULKAN
+    int instanceSlot = uInstanceBaseIndex + gl_InstanceIndex;
+#else
     int instanceSlot = uInstanceBaseIndex + gl_InstanceID;
+#endif
     mat4 model = instanceModels[instanceSlot];
     mat4 normalMatrix = instanceNormalModels[instanceSlot];
 #else
@@ -72,45 +168,14 @@ void main() {
 #endif
 
 #ifdef FRAGMENT_SHADER
-in vec3 vWorldPosition;
-in vec3 vWorldNormal;
-in vec3 vWorldTangent;
-in float vTangentHandedness;
-in vec2 vTexCoord;
-in vec4 vLightSpacePosition;
-in vec4 vLightSpacePositions[3];
-out vec4 FragColor;
-
-struct LightUVE {
-    int type; // 0 = Directional, 1 = Point, 2 = Spot
-    vec3 position;
-    vec3 direction;
-    vec3 color;
-    float intensity;
-    float range;
-    float spotAngleDegrees;
-};
-
-uniform LightUVE uLights[4];
-uniform vec3 uAmbientColor;
-uniform vec3 uViewPosition;
-uniform vec3 uAlbedoColor;
-uniform float uMetallic;
-uniform float uRoughness;
-uniform vec3 uEmissiveColor;
-uniform sampler2D uAlbedoTexture;
-uniform sampler2D uNormalTexture;
-uniform sampler2D uAOTexture;
-// Legacy Increment 27 pair retained for project-authored shaders and direct single-map tests.
-uniform sampler2D uShadowMapTexture;
-uniform mat4 uLightSpaceMatrix;
-uniform int uShadowPcfKernelRadius;
-// Increment 30 fixed three-cascade directional shadow contract.
-uniform sampler2D uShadowMapTextures[3];
-uniform float uShadowCascadeSplits[3];
-uniform int uShadowCascadeCount;
-// Increment 31: fraction of each non-final cascade depth interval used to cross-fade into the next.
-uniform float uShadowCascadeBlendRatio;
+layout(location = 0) in vec3 vWorldPosition;
+layout(location = 1) in vec3 vWorldNormal;
+layout(location = 2) in vec3 vWorldTangent;
+layout(location = 3) in float vTangentHandedness;
+layout(location = 4) in vec2 vTexCoord;
+layout(location = 5) in vec4 vLightSpacePosition;
+layout(location = 6) in vec4 vLightSpacePositions[3];
+layout(location = 0) out vec4 FragColor;
 
 const float kPiUVE = 3.14159265359;
 const float kBrdfEpsilonUVE = 0.0001;
@@ -148,22 +213,22 @@ vec3 FresnelSchlickUVE(float halfDotView, vec3 baseReflectance) {
 
 float SampleCascadeDepthUVE(int cascadeIndex, vec2 texCoord) {
     if (cascadeIndex == 0) {
-        return texture(uShadowMapTextures[0], texCoord).r;
+        return texture(uShadowMapTextures0, texCoord).r;
     }
     if (cascadeIndex == 1) {
-        return texture(uShadowMapTextures[1], texCoord).r;
+        return texture(uShadowMapTextures1, texCoord).r;
     }
-    return texture(uShadowMapTextures[2], texCoord).r;
+    return texture(uShadowMapTextures2, texCoord).r;
 }
 
 vec2 CascadeTexelSizeUVE(int cascadeIndex) {
     if (cascadeIndex == 0) {
-        return 1.0 / vec2(textureSize(uShadowMapTextures[0], 0));
+        return 1.0 / vec2(textureSize(uShadowMapTextures0, 0));
     }
     if (cascadeIndex == 1) {
-        return 1.0 / vec2(textureSize(uShadowMapTextures[1], 0));
+        return 1.0 / vec2(textureSize(uShadowMapTextures1, 0));
     }
-    return 1.0 / vec2(textureSize(uShadowMapTextures[2], 0));
+    return 1.0 / vec2(textureSize(uShadowMapTextures2, 0));
 }
 
 vec4 CascadeLightSpacePositionUVE(int cascadeIndex) {
@@ -189,8 +254,15 @@ float ShadowFactorFromPositionUVE(vec4 lightSpacePosition, vec3 normal, vec3 lig
     }
 
     int kernelRadius = clamp(uShadowPcfKernelRadius, 0, 2);
+#ifdef UVE_VULKAN
+    if (cascadeIndex < 0) {
+        return 1.0;
+    }
+    vec2 texelSize = CascadeTexelSizeUVE(cascadeIndex);
+#else
     vec2 texelSize = cascadeIndex < 0 ? 1.0 / vec2(textureSize(uShadowMapTexture, 0))
                                       : CascadeTexelSizeUVE(cascadeIndex);
+#endif
     float currentDepth = projected.z;
     float bias = max(0.0025 * (1.0 - max(dot(normal, lightDirection), 0.0)), 0.0005);
     float visibleSamples = 0.0;
@@ -202,8 +274,12 @@ float ShadowFactorFromPositionUVE(vec4 lightSpacePosition, vec3 normal, vec3 lig
                 continue;
             }
             vec2 sampleCoord = projected.xy + vec2(offsetX, offsetY) * texelSize;
+#ifdef UVE_VULKAN
+            float sampledDepth = SampleCascadeDepthUVE(cascadeIndex, sampleCoord);
+#else
             float sampledDepth = cascadeIndex < 0 ? texture(uShadowMapTexture, sampleCoord).r
                                                   : SampleCascadeDepthUVE(cascadeIndex, sampleCoord);
+#endif
             visibleSamples += currentDepth - bias > sampledDepth ? 0.0 : 1.0;
             ++sampleCount;
         }

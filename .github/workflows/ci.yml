@@ -86,7 +86,8 @@ jobs:
 
           for stem in (
               "basic_2d", "basic_3d", "basic_3d_textured", "particle", "fullscreen_quad", "fullscreen_copy",
-              "bloom_bright_pass", "bloom_blur", "ssao", "ui_overlay"
+              "bloom_bright_pass", "bloom_blur", "ssao", "ui_overlay",
+              "shadow_depth", "lit_shadowed_3d"
           ):
               for stage in ("vert", "frag"):
                   root = Path("build/shaders") / stem / stage

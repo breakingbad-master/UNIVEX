@@ -29,7 +29,8 @@ struct ShaderManagerConfigUVE {
     /// When true, ShaderManagerUVE looks for an offline, backend-native artifact before it
     /// preprocesses the authoring GLSL source. Missing artifacts are not fatal: the manager falls
     /// back to the existing source/embedded path, which keeps Null/OpenGL development builds
-    /// usable when the optional artifact target was not built. The artifact mount is expected to
+    /// usable when the optional artifact target was not built; Vulkan production builds should
+    /// ship their validated SPIR-V artifacts. The artifact mount is expected to
     /// contain `<shader-stem>/<stage>/<stem>.<target>.<extension>` plus a per-stage manifest.
     bool preferCookedArtifactsUVE = true;
 

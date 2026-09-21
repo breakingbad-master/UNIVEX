@@ -54,8 +54,9 @@
 //
 // Slice M2f ("SSBOs + separate samplers") added 2026-09-18: CreatePipelineUVE reflection now
 // accepts STORAGE_BUFFER bindings (bound through the new ICommandBufferUVE::BindStorageBufferUVE
-// — GL shader-storage binding-point semantics, i-th reflected storage binding reads global slot
-// i) and separate SAMPLED_IMAGE + SAMPLER pairs (fed from the same BindTextureUVE slots as
+// — GL shader-storage binding-point semantics, the reflected descriptor binding number is the
+// global BindStorageBufferUVE slot (so sparse bindings remain addressable), and separate
+// SAMPLED_IMAGE + SAMPLER pairs (fed from the same BindTextureUVE slots as
 // combined samplers; every standalone SAMPLER binding is written with ONE device-owned fixed
 // sampler — the RHI's single GL-mirrored linear/clamp/maxLod-0 shape). Storage buffers live in
 // real per-handle VkBuffers (the M2a host-visible policy), join the per-tuple descriptor-set
