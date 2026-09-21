@@ -239,7 +239,7 @@ publicly shipping real-time engines as of today, without naming any of them.
   native D3D12 and Metal implementations, and the mobile surface adapters, remain open.
 - [~] Shader cross-compilation so one shader source authors once and targets every backend
   — `Engine/Tools/compile_shaders.py` now provides a build-time GLSL → SPIR-V → generated
-  GLSL/HLSL/MSL pipeline for Vulkan, OpenGL/GLES, D3D12, macOS, and iOS, with source hashes,
+  GLSL/HLSL/MSL pipeline for Vulkan/Android Vulkan, OpenGL/GLES, D3D12, macOS, and iOS, with source hashes,
   compiler versions, target artifacts, and a manifest. CMake/release integration and migration
   of every existing built-in shader remain open; runtime compilation is deliberately not used.
 - [~] GPU compute-shader support (for culling, particle simulation, skinning, etc. on the

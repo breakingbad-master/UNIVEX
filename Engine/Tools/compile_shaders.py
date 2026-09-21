@@ -27,7 +27,7 @@ import sys
 from typing import Iterable
 
 
-TARGETS = ("vulkan", "opengl", "gles", "d3d12", "metal", "ios")
+TARGETS = ("vulkan", "android-vulkan", "opengl", "gles", "d3d12", "metal", "ios")
 STAGES = ("vert", "frag", "comp", "geom", "tesc", "tese")
 
 
@@ -78,7 +78,7 @@ def _target_command(
     spirv_path: Path,
     output_path: Path,
 ) -> list[str] | None:
-    if target == "vulkan":
+    if target in ("vulkan", "android-vulkan"):
         shutil.copyfile(spirv_path, output_path)
         return None
     if target == "opengl":
@@ -119,6 +119,7 @@ def _target_command(
 def _artifact_name(source: Path, target: str) -> str:
     suffix = {
         "vulkan": ".spv",
+        "android-vulkan": ".spv",
         "opengl": ".glsl",
         "gles": ".glsl",
         "d3d12": ".hlsl",

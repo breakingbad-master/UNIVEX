@@ -5,7 +5,7 @@ backends targeted by the RHI:
 
 | Target | Artifact |
 |---|---|
-| Vulkan | SPIR-V (`.spv`) |
+| Vulkan / Android Vulkan | SPIR-V (`.spv`) |
 | Desktop OpenGL | generated GLSL 4.50 |
 | OpenGL ES / Android fallback | generated ESSL 3.10 |
 | D3D12 | generated HLSL Shader Model 6.0 |
