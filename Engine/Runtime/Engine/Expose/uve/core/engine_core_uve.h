@@ -148,8 +148,10 @@ namespace UVE::Core {
 /// never actually writes to disk during a short test run. ShaderManagerUVE (Increment 21) is
 /// constructed right after RenderDevice, in both headless and windowed mode (it works identically
 /// against NullRenderDeviceUVE/GlRenderDeviceUVE); Init() mounts
-/// EngineConfigUVE::shaderSourceRealDirectoryUVE under shaderSourceMountPrefixUVE first, so the
-/// built-in `.glsl` files resolve through the VFS. Update() calls ShaderManagerUVE::UpdateUVE()
+/// EngineConfigUVE::shaderSourceRealDirectoryUVE under shaderSourceMountPrefixUVE first, and
+/// the optional cooked artifact directory under shaderArtifactMountPrefixUVE. The built-in `.glsl`
+/// files resolve through the VFS while a matching offline artifact is selected for a backend that
+/// supports it. Update() calls ShaderManagerUVE::UpdateUVE()
 /// every frame (draining background preprocessing, compiling/linking on the main thread, and
 /// polling hot-reload) alongside the existing HotReloadUVE/AssetManagerUVE maintenance calls. The
 /// demo triangle above now loads its program from the `basic_3d.glsl` built-in via

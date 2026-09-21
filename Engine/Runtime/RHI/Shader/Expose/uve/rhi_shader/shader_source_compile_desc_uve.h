@@ -13,7 +13,8 @@ namespace UVE::Render::Shader {
 
 /// Describes one shader stage to compile via IShaderManagerUVE::CreateSourceUVE().
 /// `virtualFilePath` and `embeddedFallbackSourceCode` are both always provided (not an
-/// either/or): ShaderManagerUVE tries the virtual file first (enabling hot-reload tracking) and
+/// either/or): ShaderManagerUVE first tries a matching mounted cooked artifact when the backend
+/// has one, otherwise it tries the virtual authoring file (enabling hot-reload tracking) and
 /// transparently falls back to the embedded string if IFileSystemUVE::HasFileUVE() is false for
 /// `virtualFilePath` — see BuiltIn::kBasic3DSource for the convention every built-in follows.
 struct ShaderSourceCompileDescUVE {

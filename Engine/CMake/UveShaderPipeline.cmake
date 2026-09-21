@@ -1,13 +1,15 @@
 # Copyright (c) 2026 UniVex Studios. All Rights Reserved.
 #
-# Optional build-time shader artifact integration.  The function is intentionally opt-in: a
+# Optional build-time shader artifact integration. The function is intentionally opt-in: a
 # developer building only the Null/OpenGL slice does not need every platform SDK, while a release
-# job can make the requested toolchain mandatory and get reproducible target artifacts.
+# job can make the requested toolchain mandatory and get reproducible target artifacts. A target
+# may carry a target-specific define when the authoring source has an API-layout branch; those
+# variants are compiled and tracked independently rather than silently sharing incompatible SPIR-V.
 
 function(uve_add_shader_artifacts target_name)
     set(options)
     set(one_value_args SOURCE STAGE OUTPUT_DIRECTORY)
-    set(multi_value_args TARGETS INCLUDE_DIRECTORIES DEFINES)
+    set(multi_value_args TARGETS INCLUDE_DIRECTORIES DEFINES TARGET_DEFINES)
     cmake_parse_arguments(UVE_SHADER "${options}" "${one_value_args}" "${multi_value_args}" ${ARGN})
 
     if(NOT UVE_SHADER_SOURCE OR NOT UVE_SHADER_STAGE OR NOT UVE_SHADER_OUTPUT_DIRECTORY)
@@ -32,7 +34,16 @@ function(uve_add_shader_artifacts target_name)
 
     get_filename_component(source_stem "${UVE_SHADER_SOURCE}" NAME_WE)
     set(output_directory "${UVE_SHADER_OUTPUT_DIRECTORY}")
-    set(outputs "${output_directory}/${source_stem}.intermediate.spv")
+    if(UVE_SHADER_TARGET_DEFINES)
+        # Target-specific source semantics (for example Vulkan push constants versus OpenGL
+        # default-block uniforms) produce one validated intermediate per requested target.
+        set(outputs)
+        foreach(shader_target IN LISTS shader_targets)
+            list(APPEND outputs "${output_directory}/${source_stem}.intermediate.${shader_target}.spv")
+        endforeach()
+    else()
+        set(outputs "${output_directory}/${source_stem}.intermediate.spv")
+    endif()
     foreach(shader_target IN LISTS shader_targets)
         if(shader_target STREQUAL "vulkan" OR shader_target STREQUAL "android-vulkan")
             list(APPEND outputs "${output_directory}/${source_stem}.${shader_target}.spv")
@@ -60,6 +71,10 @@ function(uve_add_shader_artifacts target_name)
     foreach(shader_target IN LISTS shader_targets)
         list(APPEND target_args "--target" "${shader_target}")
     endforeach()
+    set(target_define_args)
+    foreach(target_define IN LISTS UVE_SHADER_TARGET_DEFINES)
+        list(APPEND target_define_args "--target-define" "${target_define}")
+    endforeach()
 
     add_custom_command(
         OUTPUT ${outputs}
@@ -70,7 +85,7 @@ function(uve_add_shader_artifacts target_name)
                 --out-dir "${output_directory}"
                 --glslang "${UVE_GLSLANG_VALIDATOR}"
                 --spirv-cross "${UVE_SPIRV_CROSS}"
-                ${target_args} ${include_args} ${define_args}
+                ${target_args} ${include_args} ${define_args} ${target_define_args}
         DEPENDS "${UVE_SHADER_SOURCE}" "${CMAKE_SOURCE_DIR}/Engine/Tools/compile_shaders.py"
         COMMENT "Compiling ${target_name} shader artifacts"
         VERBATIM

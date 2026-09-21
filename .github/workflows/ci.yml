@@ -69,9 +69,33 @@ jobs:
       - name: Build and validate offline shader artifacts
         run: |
           cmake --build build --target uve_builtin_shader_artifacts --parallel "$(nproc)"
-          find build/shaders -type f -name '*.spv' -print0 | while IFS= read -r -d '' shader; do
+          find build/shaders -type f -name '*.spv' \
+            ! -name '*.intermediate.opengl.spv' \
+            ! -name '*.intermediate.gles.spv' \
+            -print0 | while IFS= read -r -d '' shader; do
             spirv-val --target-env vulkan1.2 "$shader"
           done
+          find build/shaders -type f \( \
+            -name '*.intermediate.opengl.spv' -o \
+            -name '*.intermediate.gles.spv' \) -print0 | while IFS= read -r -d '' shader; do
+            spirv-val --target-env opengl4.5 "$shader"
+          done
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          for stem in ("basic_2d", "basic_3d"):
+              for stage in ("vert", "frag"):
+                  root = Path("build/shaders") / stem / stage
+                  manifest = json.loads((root / "shader_manifest.json").read_text(encoding="utf-8"))
+                  artifact = manifest["artifacts"][0]
+                  if artifact["target_defines"].get("vulkan") != ["UVE_VULKAN"]:
+                      raise SystemExit(f"{stem}/{stage}: Vulkan target define is not recorded")
+                  for target, artifact_path in artifact["artifacts"].items():
+                      if not Path(artifact_path).is_file() or Path(artifact_path).stat().st_size == 0:
+                          raise SystemExit(f"{stem}/{stage}: missing/empty {target} artifact")
+          print("Validated cooked basic_2d/basic_3d stage artifacts and target policy manifests")
+          PY
           spirv-cross build/shaders/bindless_probe/bindless_probe.vulkan.spv --reflect \
             > build/shaders/bindless_probe/bindless_probe.reflection.json
           python3 - <<'PY'

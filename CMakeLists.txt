@@ -56,6 +56,44 @@ if(UVE_BUILD_BUILTIN_SHADER_ARTIFACTS)
             OUTPUT_DIRECTORY "${UVE_SHADER_ARTIFACT_DIRECTORY}/${_uve_shader}")
         list(APPEND _uve_builtin_shader_artifact_targets "uve_shader_artifact_${_uve_shader}")
     endforeach()
+
+    # Graphics shader migration starts with the two smallest built-ins.  The canonical source
+    # remains OpenGL-compatible for the runtime fallback, while the offline Vulkan compile selects
+    # its explicit push-constant layout.  SPIRV-Cross then emits the corresponding native form for
+    # every requested backend; each stage gets its own directory so a generated artifact can never
+    # be mistaken for the other entry point.
+    foreach(_uve_shader IN ITEMS basic_2d basic_3d)
+        uve_add_shader_artifacts(
+            "uve_shader_artifact_${_uve_shader}_vert"
+            SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/Engine/Runtime/RHI/Shader/built_in/${_uve_shader}.glsl"
+            STAGE vert
+            TARGETS ${_uve_builtin_shader_targets}
+            DEFINES VERTEX_SHADER
+            TARGET_DEFINES
+                vulkan=UVE_VULKAN
+                android-vulkan=UVE_VULKAN
+                d3d12=UVE_VULKAN
+                metal=UVE_VULKAN
+                ios=UVE_VULKAN
+            OUTPUT_DIRECTORY "${UVE_SHADER_ARTIFACT_DIRECTORY}/${_uve_shader}/vert")
+        uve_add_shader_artifacts(
+            "uve_shader_artifact_${_uve_shader}_frag"
+            SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/Engine/Runtime/RHI/Shader/built_in/${_uve_shader}.glsl"
+            STAGE frag
+            TARGETS ${_uve_builtin_shader_targets}
+            DEFINES FRAGMENT_SHADER
+            TARGET_DEFINES
+                vulkan=UVE_VULKAN
+                android-vulkan=UVE_VULKAN
+                d3d12=UVE_VULKAN
+                metal=UVE_VULKAN
+                ios=UVE_VULKAN
+            OUTPUT_DIRECTORY "${UVE_SHADER_ARTIFACT_DIRECTORY}/${_uve_shader}/frag")
+        list(APPEND _uve_builtin_shader_artifact_targets
+            "uve_shader_artifact_${_uve_shader}_vert"
+            "uve_shader_artifact_${_uve_shader}_frag")
+    endforeach()
+
     add_custom_target(uve_builtin_shader_artifacts)
     add_dependencies(uve_builtin_shader_artifacts ${_uve_builtin_shader_artifact_targets})
 endif()

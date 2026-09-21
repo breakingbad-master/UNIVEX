@@ -2,11 +2,12 @@
 """Build one canonical GLSL shader source into backend-specific artifacts.
 
 The engine keeps source compilation out of the runtime.  This tool uses the Khronos GLSL
-front-end to produce SPIR-V once, then uses the SPIR-V cross compiler to emit the textual
-artifacts required by the other native backends.  Vulkan consumes the SPIR-V directly; desktop
-OpenGL and GLES consume generated GLSL; D3D12 consumes generated HLSL; Metal and iOS consume
-MSL.  The source hash and tool versions are written to a manifest so stale or non-reproducible
-artifacts are diagnosable instead of silently accepted.
+front-end to produce target-semantics SPIR-V variants, then uses the SPIR-V cross compiler to
+emit the textual artifacts required by the other native backends. Vulkan consumes the Vulkan
+variant directly; desktop OpenGL and GLES consume artifacts generated from OpenGL-semantics SPIR-V;
+D3D12 consumes HLSL; Metal and iOS consume MSL. The source hash, target defines, and tool versions
+are written to a manifest so stale or non-reproducible artifacts are diagnosable instead of silently
+accepted.
 
 The tools are deliberately discovered at invocation time.  A developer machine or CI runner
 that does not target a platform does not need that platform's SDK, while a release build can
@@ -29,6 +30,7 @@ from typing import Iterable
 
 TARGETS = ("vulkan", "android-vulkan", "opengl", "gles", "d3d12", "metal", "ios")
 STAGES = ("vert", "frag", "comp", "geom", "tesc", "tese")
+_OPENGL_TARGETS = frozenset(("opengl", "gles"))
 
 
 def _tool_or_error(name: str, override: str | None) -> str:
@@ -74,6 +76,7 @@ def _safe_output_path(output_dir: Path, relative_name: str) -> Path:
 
 def _target_command(
     target: str,
+    stage: str,
     spirv_cross: str,
     spirv_path: Path,
     output_path: Path,
@@ -84,12 +87,16 @@ def _target_command(
     if target == "opengl":
         return [spirv_cross, str(spirv_path), "--version", "450", "--output", str(output_path)]
     if target == "gles":
+        # The Android fallback context is ES 3.0. Compute artifacts still request ES 3.1
+        # because the source uses compute-only features, but graphics stages stay consumable by
+        # the fixed ES 3.0 baseline used by the current Android window backend.
+        gles_version = "310" if stage in ("comp", "geom", "tesc", "tese") else "300"
         return [
             spirv_cross,
             str(spirv_path),
             "--es",
             "--version",
-            "310",
+            gles_version,
             "--output",
             str(output_path),
         ]
@@ -129,6 +136,44 @@ def _artifact_name(source: Path, target: str) -> str:
     return f"{source.stem}.{target}{suffix}"
 
 
+def _compile_target_spirv(
+    source: Path,
+    stage: str,
+    entry: str,
+    target: str,
+    output_path: Path,
+    glslang: str,
+    include_dirs: tuple[Path, ...],
+    defines: tuple[str, ...],
+) -> None:
+    # OpenGL and Vulkan are different SPIR-V source environments.  The former keeps the legacy
+    # default-block uniforms that the GL runtime updates with glUniform; the latter selects the
+    # explicit push-constant/descriptor layout used by native APIs.  Cross-compiling both from
+    # the same authoring file is why target-specific defines are part of the artifact manifest.
+    semantics = "-G" if target in _OPENGL_TARGETS else "-V"
+    compile_command = [
+        glslang,
+        semantics,
+        "-S",
+        stage,
+        "-e",
+        entry,
+        "-o",
+        str(output_path),
+    ]
+    if target in _OPENGL_TARGETS:
+        # OpenGL SPIR-V requires explicit locations for non-opaque default-block uniforms.  The
+        # source remains directly consumable by the runtime compiler without those generated
+        # locations; glslang assigns them only for this offline GL artifact variant.
+        compile_command.append("--auto-map-locations")
+    for include_dir in include_dirs:
+        compile_command.append(f"-I{include_dir}")
+    for define in defines:
+        compile_command.append(f"-D{define}")
+    compile_command.append(str(source))
+    _run(compile_command)
+
+
 def compile_shader(
     source: Path,
     stage: str,
@@ -139,24 +184,58 @@ def compile_shader(
     spirv_cross: str,
     include_dirs: Iterable[Path],
     defines: Iterable[str],
+    target_defines: dict[str, tuple[str, ...]],
 ) -> dict[str, object]:
     source_bytes = source.read_bytes()
     source_hash = hashlib.sha256(source_bytes).hexdigest()
+    define_list = tuple(defines)
+    include_list = tuple(include_dirs)
+    target_list = tuple(dict.fromkeys(targets))
     output_dir.mkdir(parents=True, exist_ok=True)
-    spirv_path = _safe_output_path(output_dir, f"{source.stem}.intermediate.spv")
 
-    compile_command = [glslang, "-V", "-S", stage, "-e", entry, "-o", str(spirv_path)]
-    for include_dir in include_dirs:
-        compile_command.append(f"-I{include_dir}")
-    for define in defines:
-        compile_command.append(f"-D{define}")
-    compile_command.append(str(source))
-    _run(compile_command)
+    # With no target-specific policy (the historical compute path), keep the stable intermediate
+    # filename.  Graphics migrations opt into per-target variants so a GL default-uniform module
+    # can never accidentally be handed to Vulkan, or vice versa.
+    use_per_target_intermediates = bool(target_defines)
+    spirv_by_target: dict[str, Path] = {}
+    if use_per_target_intermediates:
+        for target in target_list:
+            intermediate_name = f"{source.stem}.intermediate.{target}.spv"
+            spirv_path = _safe_output_path(output_dir, intermediate_name)
+            target_define_list = define_list + tuple(target_defines.get(target, ()))
+            _compile_target_spirv(
+                source,
+                stage,
+                entry,
+                target,
+                spirv_path,
+                glslang,
+                include_list,
+                target_define_list,
+            )
+            spirv_by_target[target] = spirv_path
+    else:
+        # Legacy/all-targets compute artifacts intentionally have one Vulkan SPIR-V module.
+        # There is no source conditional in that path, so compiling it once is both faster and
+        # preserves the historical `.intermediate.spv` artifact name.
+        target = target_list[0]
+        spirv_path = _safe_output_path(output_dir, f"{source.stem}.intermediate.spv")
+        _compile_target_spirv(
+            source,
+            stage,
+            entry,
+            target,
+            spirv_path,
+            glslang,
+            include_list,
+            define_list,
+        )
+        spirv_by_target = {target_name: spirv_path for target_name in target_list}
 
     artifacts: dict[str, str] = {}
-    for target in targets:
+    for target in target_list:
         artifact_path = _safe_output_path(output_dir, _artifact_name(source, target))
-        command = _target_command(target, spirv_cross, spirv_path, artifact_path)
+        command = _target_command(target, stage, spirv_cross, spirv_by_target[target], artifact_path)
         if command is not None:
             _run(command)
         artifacts[target] = str(artifact_path)
@@ -166,8 +245,22 @@ def compile_shader(
         "source_sha256": source_hash,
         "stage": stage,
         "entry_point": entry,
+        "defines": list(define_list),
+        "target_defines": {target: list(target_defines.get(target, ())) for target in target_list},
         "artifacts": artifacts,
     }
+
+
+def _parse_target_defines(values: Iterable[str]) -> dict[str, tuple[str, ...]]:
+    parsed: dict[str, list[str]] = {}
+    for value in values:
+        target, separator, define = value.partition("=")
+        if not separator or target not in TARGETS or not define:
+            raise RuntimeError(
+                f"invalid --target-define '{value}'; expected TARGET=DEFINE for one of {TARGETS}"
+            )
+        parsed.setdefault(target, []).append(define)
+    return {target: tuple(defines) for target, defines in parsed.items()}
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -188,6 +281,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("-I", "--include-dir", dest="include_dirs", action="append", type=Path, default=[])
     parser.add_argument("-D", "--define", dest="defines", action="append", default=[])
     parser.add_argument(
+        "--target-define",
+        dest="target_defines",
+        action="append",
+        default=[],
+        metavar="TARGET=DEFINE",
+        help="define only while compiling one target's source variant; repeat as needed",
+    )
+    parser.add_argument(
         "--manifest",
         type=Path,
         help="manifest path (default: <out-dir>/shader_manifest.json)",
@@ -207,6 +308,7 @@ def main(argv: list[str]) -> int:
         raise RuntimeError(f"shader source does not exist: {source}")
 
     targets = tuple(dict.fromkeys(args.targets or TARGETS))
+    target_defines = _parse_target_defines(args.target_defines)
     glslang = args.glslang or "glslangValidator"
     spirv_cross = args.spirv_cross or "spirv-cross"
     manifest_path = (args.manifest or args.out_dir / "shader_manifest.json").resolve()
@@ -217,6 +319,8 @@ def main(argv: list[str]) -> int:
             "stage": args.stage,
             "entry_point": args.entry,
             "targets": targets,
+            "defines": args.defines,
+            "target_defines": {target: list(defines) for target, defines in target_defines.items()},
             "glslang": glslang,
             "spirv_cross": spirv_cross,
             "out_dir": str(args.out_dir.resolve()),
@@ -235,9 +339,10 @@ def main(argv: list[str]) -> int:
         spirv_cross,
         (path.resolve() for path in args.include_dirs),
         args.defines,
+        target_defines,
     )
     manifest = {
-        "format": 1,
+        "format": 2,
         "toolchain": {
             "glslang_validator": {"path": glslang, "version": _version(glslang)},
             "spirv_cross": {"path": spirv_cross, "version": _version(spirv_cross)},

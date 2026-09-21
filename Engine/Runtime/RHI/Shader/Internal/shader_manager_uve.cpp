@@ -4,10 +4,12 @@
 #include "uve/rhi_shader/shader_manager_uve.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <filesystem>
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <unordered_map>
 #include <utility>
@@ -21,6 +23,15 @@
 #include "uve/threading/job_counter_uve.h"
 
 namespace UVE::Render::Shader {
+
+namespace {
+
+struct CookedShaderArtifactUVE {
+    std::string virtualPath;
+    std::vector<std::byte> bytes;
+};
+
+} // namespace
 
 struct ShaderManagerUVE::ImplUVE {
     Threading::IThreadPoolUVE& threadPool;
@@ -37,6 +48,7 @@ struct ShaderManagerUVE::ImplUVE {
         std::shared_ptr<ShaderSourceUVE> target;
         ShaderSourceCompileDescUVE desc;
         Detail::PreprocessResultUVE preprocess;
+        std::optional<CookedShaderArtifactUVE> cookedArtifact;
     };
     std::vector<SourceJobUVE> completedSourceJobs; // guarded by mutex - written from worker threads
 
@@ -119,6 +131,93 @@ namespace {
     defines.emplace_back(ShaderStageDefineNameUVE(stage), "1");
     defines.insert(defines.end(), extraDefines.begin(), extraDefines.end());
     return defines;
+}
+
+[[nodiscard]] const char* ShaderArtifactStageDirectoryUVE(ShaderStageUVE stage) noexcept {
+    switch (stage) {
+        case ShaderStageUVE::Vertex:
+            return "vert";
+        case ShaderStageUVE::Fragment:
+            return "frag";
+        case ShaderStageUVE::Compute:
+            return "comp";
+        case ShaderStageUVE::Geometry:
+            return "geom";
+    }
+    return "";
+}
+
+struct CookedArtifactFormatUVE {
+    const char* target = nullptr;
+    const char* extension = nullptr;
+};
+
+[[nodiscard]] std::optional<CookedArtifactFormatUVE> GetCookedArtifactFormatUVE(
+    const IRenderDeviceUVE& renderDevice) noexcept {
+    const std::string_view backend = renderDevice.GetBackendNameUVE();
+    if (backend.starts_with("Vulkan")) {
+        return CookedArtifactFormatUVE{"vulkan", ".spv"};
+    }
+#if defined(__ANDROID__)
+    if (backend == "OpenGL") {
+        return CookedArtifactFormatUVE{"gles", ".glsl"};
+    }
+#else
+    if (backend == "OpenGL") {
+        return CookedArtifactFormatUVE{"opengl", ".glsl"};
+    }
+#endif
+    if (backend.starts_with("D3D12")) {
+        return CookedArtifactFormatUVE{"d3d12", ".hlsl"};
+    }
+    if (backend.starts_with("Metal")) {
+        return CookedArtifactFormatUVE{"metal", ".metal"};
+    }
+    return std::nullopt;
+}
+
+[[nodiscard]] std::optional<CookedShaderArtifactUVE> TryReadCookedArtifactUVE(
+    ShaderManagerUVE::ImplUVE& impl, const ShaderSourceCompileDescUVE& desc) {
+    if (!impl.config.preferCookedArtifactsUVE || impl.config.cookedArtifactMountPrefixUVE.empty() ||
+        desc.virtualFilePath.empty() || !desc.extraDefines.empty()) {
+        // A target-specific artifact cannot represent arbitrary per-request defines (for example
+        // UVE_INSTANCED), so those requests must retain the source path until their own cooked
+        // variant exists.
+        return std::nullopt;
+    }
+    const std::optional<CookedArtifactFormatUVE> format = GetCookedArtifactFormatUVE(impl.renderDevice);
+    const char* const stageDirectory = ShaderArtifactStageDirectoryUVE(desc.stage);
+    if (!format.has_value() || stageDirectory[0] == '\0') {
+        return std::nullopt;
+    }
+    const std::filesystem::path sourcePath(desc.virtualFilePath);
+    const std::string stem = sourcePath.stem().string();
+    if (stem.empty() || stem == "." || stem == "..") {
+        return std::nullopt;
+    }
+    std::string virtualPath = impl.config.cookedArtifactMountPrefixUVE;
+    if (!virtualPath.empty() && virtualPath.back() != '/') {
+        virtualPath += '/';
+    }
+    virtualPath += stem;
+    virtualPath += '/';
+    virtualPath += stageDirectory;
+    virtualPath += '/';
+    virtualPath += stem;
+    virtualPath += '.';
+    virtualPath += format->target;
+    virtualPath += format->extension;
+
+    // HasFileUVE is intentional here: ReadFileUVE logs a hard error for a missing mount, but a
+    // missing cooked tree is the normal source-only development fallback and must stay quiet.
+    if (!impl.fileSystem.HasFileUVE(virtualPath)) {
+        return std::nullopt;
+    }
+    const std::optional<std::vector<std::byte>> bytes = impl.fileSystem.ReadFileUVE(virtualPath);
+    if (!bytes.has_value() || bytes->empty()) {
+        return std::nullopt;
+    }
+    return CookedShaderArtifactUVE{std::move(virtualPath), *bytes};
 }
 
 [[nodiscard]] std::filesystem::file_time_type GetRealFileWriteTimeUVE(Asset::IFileSystemUVE& fileSystem,
@@ -233,13 +332,27 @@ void ShaderManagerUVE::SubmitSourceCompileJobUVE(ImplUVE& impl, const std::share
     }
     impl.threadPool.SubmitUVE(
         [&impl, target, desc]() {
-            const std::vector<std::pair<std::string, std::string>> defines =
-                BuildDefinesUVE(desc.stage, impl.config.injectDebugDefineUVE, desc.extraDefines);
-            Detail::PreprocessResultUVE preprocess = Detail::PreprocessShaderSourceUVE(
-                impl.fileSystem, desc.virtualFilePath, desc.embeddedFallbackSourceCode, defines);
+            std::optional<CookedShaderArtifactUVE> cookedArtifact = TryReadCookedArtifactUVE(impl, desc);
+            Detail::PreprocessResultUVE preprocess;
+            if (cookedArtifact.has_value()) {
+                // RHI ShaderDescUVE deliberately uses one byte-preserving string field for both
+                // GL text and Vulkan SPIR-V. Keep the artifact bytes intact; an embedded NUL is
+                // valid in the Vulkan path and GL artifacts are ordinary UTF-8 text.
+                preprocess.success = true;
+                preprocess.resolvedSource.assign(
+                    reinterpret_cast<const char*>(cookedArtifact->bytes.data()), cookedArtifact->bytes.size());
+                preprocess.dependencyClosure.push_back(cookedArtifact->virtualPath);
+                preprocess.fileIndexTable.push_back(cookedArtifact->virtualPath);
+            } else {
+                const std::vector<std::pair<std::string, std::string>> defines =
+                    BuildDefinesUVE(desc.stage, impl.config.injectDebugDefineUVE, desc.extraDefines);
+                preprocess = Detail::PreprocessShaderSourceUVE(
+                    impl.fileSystem, desc.virtualFilePath, desc.embeddedFallbackSourceCode, defines);
+            }
 
             std::lock_guard<std::mutex> lock(impl.mutex);
-            impl.completedSourceJobs.push_back(ImplUVE::SourceJobUVE{target, desc, std::move(preprocess)});
+            impl.completedSourceJobs.push_back(
+                ImplUVE::SourceJobUVE{target, desc, std::move(preprocess), std::move(cookedArtifact)});
         },
         impl.pendingJobs);
 }
@@ -277,6 +390,10 @@ void ShaderManagerUVE::DrainCompletedSourceJobsUVE(ImplUVE& impl) {
                 }
                 source.m_handle = newHandle;
                 source.m_resolvedSource = job.preprocess.resolvedSource;
+                source.m_usedCookedArtifact = job.cookedArtifact.has_value();
+                source.m_cookedArtifactVirtualPath = job.cookedArtifact.has_value()
+                    ? job.cookedArtifact->virtualPath
+                    : std::string{};
                 source.m_contentHash = ComputeSourceContentHashUVE(impl.renderDevice, job.preprocess.resolvedSource,
                                                                     job.desc.stage, job.desc.entryPointName);
                 source.m_dependencyClosure = job.preprocess.dependencyClosure;

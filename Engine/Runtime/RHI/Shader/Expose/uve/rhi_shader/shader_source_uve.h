@@ -38,8 +38,20 @@ public:
     [[nodiscard]] bool IsValidUVE() const noexcept { return m_valid; }
 
     /// The fully #include-expanded, macro-substituted source text that was actually compiled
-    /// (empty until IsReadyUVE()).
+    /// (empty until IsReadyUVE()), or the byte-preserving cooked artifact payload when
+    /// UsedCookedArtifactUVE() is true (SPIR-V for Vulkan, native text for text backends).
     [[nodiscard]] const std::string& GetResolvedSourceUVE() const noexcept { return m_resolvedSource; }
+
+    /// True when the last successful stage creation consumed a cooked backend artifact instead of
+    /// the authoring GLSL text. This is useful in diagnostics and startup telemetry; it does not
+    /// change the ShaderHandleUVE contract.
+    [[nodiscard]] bool UsedCookedArtifactUVE() const noexcept { return m_usedCookedArtifact; }
+
+    /// The virtual path of the cooked artifact used by the last successful creation, or empty
+    /// when the stage came from source/embedded fallback.
+    [[nodiscard]] const std::string& GetCookedArtifactVirtualPathUVE() const noexcept {
+        return m_cookedArtifactVirtualPath;
+    }
 
     [[nodiscard]] const ShaderCompileDiagnosticsUVE& GetDiagnosticsUVE() const noexcept { return m_diagnostics; }
 
@@ -56,6 +68,8 @@ private:
     bool m_ready = false;
     bool m_valid = false;
     std::string m_resolvedSource;
+    bool m_usedCookedArtifact = false;
+    std::string m_cookedArtifactVirtualPath;
     ShaderCompileDiagnosticsUVE m_diagnostics;
     std::uint64_t m_contentHash = 0;
 

@@ -366,15 +366,25 @@ void EngineCoreUVE::Init() {
 
     // ShaderManager nineteenth: needs ThreadPool, EventSystem, RenderDevice, and FileSystem — all
     // already constructed by this point. Mounts EngineConfigUVE::shaderSourceRealDirectoryUVE
-    // under shaderSourceMountPrefixUVE first, so the built-in .glsl files (and any #include
+    // under shaderSourceMountPrefixUVE first, then the optional cooked-artifact tree under its
+    // own prefix, so the built-in .glsl files (and any #include
     // closure among them) resolve through the VFS and participate in hot-reload; a
     // missing/unreachable directory is not an error here either — every built-in also carries an
     // embedded string fallback (see Render::Shader::BuiltIn::kBasic3DSource) ShaderManagerUVE uses
     // automatically when the mount doesn't resolve. Works identically in headless mode (against
     // NullRenderDeviceUVE) and windowed mode (against GlRenderDeviceUVE).
     m_fileSystem->MountDirectoryUVE(m_config.shaderSourceMountPrefixUVE, m_config.shaderSourceRealDirectoryUVE, 0);
+    if (m_config.shaderCookedArtifactsEnabledUVE && !m_config.shaderArtifactMountPrefixUVE.empty()) {
+        // The artifact mount is lower priority than a user source mount only by virtue of its
+        // distinct prefix; cooked paths never shadow authoring paths. Its directory may not exist
+        // in a source-only build, which is an intentional fallback case rather than an init error.
+        m_fileSystem->MountDirectoryUVE(m_config.shaderArtifactMountPrefixUVE,
+                                        m_config.shaderArtifactRealDirectoryUVE, 0);
+    }
     Render::Shader::ShaderManagerConfigUVE shaderManagerConfig;
     shaderManagerConfig.cachePath = m_config.shaderCachePath;
+    shaderManagerConfig.preferCookedArtifactsUVE = m_config.shaderCookedArtifactsEnabledUVE;
+    shaderManagerConfig.cookedArtifactMountPrefixUVE = m_config.shaderArtifactMountPrefixUVE;
     shaderManagerConfig.hotReloadEnabledUVE = m_config.shaderHotReloadEnabledUVE;
     shaderManagerConfig.hotReloadPollIntervalSecondsUVE = m_config.shaderHotReloadPollIntervalSecondsUVE;
 #if UVE_DEBUG

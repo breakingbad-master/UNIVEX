@@ -242,12 +242,18 @@ publicly shipping real-time engines as of today, without naming any of them.
   GLSL/HLSL/MSL pipeline for Vulkan/Android Vulkan, OpenGL/GLES, D3D12, macOS, and iOS, with source hashes,
   compiler versions, target artifacts, and a manifest. CMake now exposes the opt-in aggregate
   `uve_builtin_shader_artifacts` target through `UVE_BUILD_BUILTIN_SHADER_ARTIFACTS=ON`; it
-  covers the four compute built-ins used by the current GPU workload proofs plus the B1
-  `bindless_probe.glsl` descriptor-set fixture, without forcing platform tools on default
-  Null/OpenGL builds. Repository CI now enables this target, runs `spirv-val` over every generated
-  SPIR-V module, and performs SPIRV-Cross JSON reflection checks for the B1 set-1 bindings.
-  Remaining: migration of the remaining built-in graphics shaders and platform-native final
-  compilation and validation; runtime compilation is deliberately not used.
+  covers the four compute built-ins used by the current GPU workload proofs, the B1
+  `bindless_probe.glsl` descriptor-set fixture, and stage-specific `basic_2d.glsl`/
+  `basic_3d.glsl` graphics artifacts. Those first graphics shaders use one authoring source with
+  OpenGL default-block uniforms and Vulkan push constants selected by target policy; embedded
+  fallback strings remain byte-identical to the authoring files. ShaderManagerUVE now mounts an
+  optional cooked tree and selects the backend artifact (`.spv` for Vulkan, generated GLSL for
+  OpenGL/GLES) before falling back to source, while requests with extra defines bypass mismatched
+  cooked variants. Repository CI enables this target, validates Vulkan and OpenGL-semantics SPIR-V,
+  checks both graphics stage manifests/artifact sets, and performs SPIRV-Cross JSON reflection
+  checks for the B1 set-1 bindings. Remaining: migration of the other built-in graphics shaders,
+  platform-native final compilation/hardware validation, and broader runtime artifact coverage;
+  runtime source compilation remains the deterministic fallback.
 - [~] GPU compute-shader support (for culling, particle simulation, skinning, etc. on the
   GPU instead of the CPU) — RHI level completed with M5a (compute pipelines, DispatchUVE,
   SSBO write path) and M5b (STORAGE_IMAGE descriptors, GENERAL transitions + image barriers,
