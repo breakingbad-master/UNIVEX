@@ -84,6 +84,7 @@ backend-specific source/binary fields, and the default CMake configure keeps art
 off so a Null/OpenGL-only checkout does not require every compiler and SDK. Release/CI configs
 can enable `UVE_BUILD_BUILTIN_SHADER_ARTIFACTS=ON` and build the aggregate
 `uve_builtin_shader_artifacts` target; that target currently covers the four compute built-ins
-used by the GPU workload proofs. Migration of the remaining built-in graphics shaders and
+used by the GPU workload proofs plus the deterministic `bindless_probe.glsl` B1 descriptor-set
+fixture. Migration of the remaining built-in graphics shaders and
 platform-native final compilation/validation remain open. The tool itself is already usable as a
 reproducible, target-aware artifact generator.

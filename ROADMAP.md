@@ -242,8 +242,9 @@ publicly shipping real-time engines as of today, without naming any of them.
   GLSL/HLSL/MSL pipeline for Vulkan/Android Vulkan, OpenGL/GLES, D3D12, macOS, and iOS, with source hashes,
   compiler versions, target artifacts, and a manifest. CMake now exposes the opt-in aggregate
   `uve_builtin_shader_artifacts` target through `UVE_BUILD_BUILTIN_SHADER_ARTIFACTS=ON`; it
-  covers the four compute built-ins used by the current GPU workload proofs without forcing
-  platform tools on default Null/OpenGL builds. Remaining: mandatory release configuration,
+  covers the four compute built-ins used by the current GPU workload proofs plus the B1
+  `bindless_probe.glsl` descriptor-set fixture, without forcing platform tools on default
+  Null/OpenGL builds. Remaining: mandatory release configuration,
   migration of the remaining built-in graphics shaders, and platform-native final compilation
   and validation; runtime compilation is deliberately not used.
 - [~] GPU compute-shader support (for culling, particle simulation, skinning, etc. on the

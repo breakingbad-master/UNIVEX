@@ -43,6 +43,7 @@ if(UVE_BUILD_BUILTIN_SHADER_ARTIFACTS)
         ios)
     set(_uve_builtin_shader_artifact_targets)
     foreach(_uve_shader IN ITEMS
+        bindless_probe
         frustum_cull
         frustum_cull_indirect
         mesh_skin
