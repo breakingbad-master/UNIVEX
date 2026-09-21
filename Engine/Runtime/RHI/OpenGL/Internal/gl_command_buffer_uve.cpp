@@ -525,7 +525,19 @@ void GlCommandBufferUVE::BindStorageBufferUVE(BufferHandleUVE buffer, std::uint3
                   "(shader storage buffers); this context does not offer them");
         return;
     }
-    if (slot >= static_cast<std::uint32_t>(m_state->maxShaderStorageBindings)) {
+    std::uint32_t physicalSlot = slot;
+#if !defined(__ANDROID__)
+    if (const auto* const pipeline = FindCurrentPipelineUVE(); pipeline != nullptr &&
+        !pipeline->storageBindingSlots.empty()) {
+        if (slot >= pipeline->storageBindingSlots.size()) {
+            UVE_ERROR("GlCommandBufferUVE: logical storage slot exceeds the bound shader's "
+                      "reflected storage-resource count");
+            return;
+        }
+        physicalSlot = pipeline->storageBindingSlots[slot];
+    }
+#endif
+    if (physicalSlot >= static_cast<std::uint32_t>(m_state->maxShaderStorageBindings)) {
         UVE_ERROR("GlCommandBufferUVE: BindStorageBufferUVE slot exceeds GL shader-storage limits");
         return;
     }
@@ -541,7 +553,7 @@ void GlCommandBufferUVE::BindStorageBufferUVE(BufferHandleUVE buffer, std::uint3
     }
     // Whole-buffer base binding, matching the Vulkan backend's whole-buffer STORAGE_BUFFER
     // descriptor (offset 0, range = the buffer's full size) byte for byte in semantics.
-    m_state->gl.glBindBufferBase(GL_SHADER_STORAGE_BUFFER, slot, bufferIt->second.glBuffer);
+    m_state->gl.glBindBufferBase(GL_SHADER_STORAGE_BUFFER, physicalSlot, bufferIt->second.glBuffer);
 #endif
 }
 

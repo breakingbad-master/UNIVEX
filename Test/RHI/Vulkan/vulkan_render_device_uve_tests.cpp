@@ -149,11 +149,17 @@ protected:
 
 TEST_F(VulkanRenderDeviceUVETest, DeviceReportsUsableWithHonestBootstrapName) {
     EXPECT_TRUE(device->IsUsableUVE());
-    // M5b: the reported name is capability-driven — a 1.3/dynamic-rendering device reports
-    // the current slice name (M5b), anything older reports the M2c classic one. Both are
-    // milestone-tagged; neither may be the bare "Vulkan" (honest capability contract).
+    // B1/M5b: the reported name is capability-driven — a dynamic-rendering device reports
+    // the current storage-image slice, and a native descriptor table adds the B1 prefix.
+    // Classic devices report the M2c fallback slice. Every accepted name is milestone-tagged;
+    // none may be the bare "Vulkan" (honest capability contract).
     const std::string_view name = device->GetBackendNameUVE();
-    EXPECT_TRUE(name == "Vulkan (M5b storage images)" || name == "Vulkan (M2c textures+staging)")
+    const bool knownName =
+        name == "Vulkan (B1 bindless + M5b storage images)" ||
+        name == "Vulkan (B1 bindless + M2c textures)" ||
+        name == "Vulkan (M5b storage images)" ||
+        name == "Vulkan (M2c textures+staging)";
+    EXPECT_TRUE(knownName)
         << "backend name must report the exact slice and capability gate, got: " << name;
 }
 
@@ -3535,6 +3541,121 @@ TEST_F(VulkanRenderDeviceUVETest, FragmentImageStoreWritesTextureAndNextFrameIma
     device->DestroyShaderUVE(vertexShader);
     device->DestroyShaderUVE(storeShader);
     device->DestroyShaderUVE(loadShader);
+}
+
+TEST_F(VulkanRenderDeviceUVETest, BindlessCapabilityAndResourcePublicationAreConsistent) {
+    // B1 fallback/lifetime proof: the device must expose native indices only when the complete
+    // native table is live. Unsupported devices keep every query on the invalid sentinel, while
+    // a capable device publishes only the descriptor classes its fixed Vulkan layout can safely
+    // represent (RGBA8 storage images and storage-capable buffers). Destruction must invalidate
+    // the public query before the handle can ever be reused by caller code.
+    const RenderDeviceCapabilitiesUVE capabilities = device->GetCapabilitiesUVE();
+    const bool nativeBindless = capabilities.supportsBindlessResources &&
+                                capabilities.supportsDescriptorIndexing;
+    EXPECT_EQ(capabilities.tier, ComputeRenderFeatureTierUVE(capabilities));
+
+    TextureDescUVE rgba8Desc{};
+    rgba8Desc.width = 1U;
+    rgba8Desc.height = 1U;
+    rgba8Desc.format = TextureFormatUVE::RGBA8Unorm;
+    const TextureHandleUVE rgba8Texture = device->CreateTextureUVE(rgba8Desc);
+    ASSERT_NE(rgba8Texture, kInvalidTextureHandleUVE);
+
+    TextureDescUVE rgba16Desc = rgba8Desc;
+    rgba16Desc.format = TextureFormatUVE::RGBA16Float;
+    const TextureHandleUVE rgba16Texture = device->CreateTextureUVE(rgba16Desc);
+    ASSERT_NE(rgba16Texture, kInvalidTextureHandleUVE);
+
+    TextureDescUVE depthDesc = rgba8Desc;
+    depthDesc.format = TextureFormatUVE::Depth32Float;
+    const TextureHandleUVE depthTexture = device->CreateTextureUVE(depthDesc);
+    ASSERT_NE(depthTexture, kInvalidTextureHandleUVE);
+
+    BufferDescUVE storageDesc{};
+    storageDesc.sizeBytes = 16U;
+    storageDesc.usage = BufferUsageUVE::Storage;
+    const BufferHandleUVE storageBuffer = device->CreateBufferUVE(storageDesc);
+    ASSERT_NE(storageBuffer, kInvalidBufferHandleUVE);
+
+    if (nativeBindless) {
+        ASSERT_GT(capabilities.maxSampledTextures, 0U);
+        ASSERT_GT(capabilities.maxStorageImages, 0U);
+        ASSERT_GT(capabilities.maxStorageBuffers, 0U);
+        EXPECT_LT(device->GetBindlessSampledTextureSlotUVE(rgba8Texture),
+                  capabilities.maxSampledTextures);
+        EXPECT_LT(device->GetBindlessStorageTextureSlotUVE(rgba8Texture),
+                  capabilities.maxStorageImages);
+        EXPECT_EQ(device->GetBindlessStorageTextureSlotUVE(rgba16Texture),
+                  kInvalidBindlessResourceSlotUVE);
+        EXPECT_EQ(device->GetBindlessStorageTextureSlotUVE(depthTexture),
+                  kInvalidBindlessResourceSlotUVE);
+        EXPECT_LT(device->GetBindlessStorageBufferSlotUVE(storageBuffer),
+                  capabilities.maxStorageBuffers);
+    } else {
+        EXPECT_EQ(device->GetBindlessSampledTextureSlotUVE(rgba8Texture),
+                  kInvalidBindlessResourceSlotUVE);
+        EXPECT_EQ(device->GetBindlessStorageTextureSlotUVE(rgba8Texture),
+                  kInvalidBindlessResourceSlotUVE);
+        EXPECT_EQ(device->GetBindlessStorageBufferSlotUVE(storageBuffer),
+                  kInvalidBindlessResourceSlotUVE);
+    }
+
+    device->DestroyTextureUVE(rgba8Texture);
+    device->DestroyTextureUVE(rgba16Texture);
+    device->DestroyTextureUVE(depthTexture);
+    device->DestroyBufferUVE(storageBuffer);
+    EXPECT_EQ(device->GetBindlessSampledTextureSlotUVE(rgba8Texture),
+              kInvalidBindlessResourceSlotUVE);
+    EXPECT_EQ(device->GetBindlessStorageTextureSlotUVE(rgba8Texture),
+              kInvalidBindlessResourceSlotUVE);
+    EXPECT_EQ(device->GetBindlessStorageBufferSlotUVE(storageBuffer),
+              kInvalidBindlessResourceSlotUVE);
+}
+
+TEST_F(VulkanRenderDeviceUVETest, ForcedDescriptorIndexingFallbackNeverPublishesNativeSlots) {
+    // The normal device path may legitimately enable B1 on a capable driver, so this test uses
+    // the construction policy switch to exercise the opposite branch on that same driver. This
+    // proves fallback selection happens before feature enabling and that callers cannot observe
+    // native slots after the table was intentionally refused.
+    if (windowManager == nullptr) {
+        GTEST_SKIP() << "the current fixture is using a headless-only device; the local Vulkan "
+                        "driver does not expose a second construction surface for the forced "
+                        "fallback comparison";
+    }
+
+    VulkanRenderDeviceOptionsUVE options{};
+    options.forceDisableDescriptorIndexing = true;
+    std::unique_ptr<VulkanRenderDeviceUVE> fallbackDevice =
+        VulkanRenderDeviceUVE::CreateUVE(*windowManager, options);
+    ASSERT_NE(fallbackDevice, nullptr)
+        << "the forced fallback device must initialize on the same Vulkan driver";
+    const RenderDeviceCapabilitiesUVE capabilities = fallbackDevice->GetCapabilitiesUVE();
+    EXPECT_FALSE(capabilities.supportsBindlessResources);
+    EXPECT_FALSE(capabilities.supportsDescriptorIndexing);
+    EXPECT_EQ(capabilities.maxSampledTextures, 0U);
+    EXPECT_EQ(capabilities.maxStorageImages, 0U);
+    EXPECT_EQ(capabilities.maxStorageBuffers, 0U);
+
+    TextureDescUVE textureDesc{};
+    textureDesc.width = 1U;
+    textureDesc.height = 1U;
+    const TextureHandleUVE texture = fallbackDevice->CreateTextureUVE(textureDesc);
+    ASSERT_NE(texture, kInvalidTextureHandleUVE);
+    BufferDescUVE bufferDesc{};
+    bufferDesc.sizeBytes = 16U;
+    bufferDesc.usage = BufferUsageUVE::Storage;
+    const BufferHandleUVE buffer = fallbackDevice->CreateBufferUVE(bufferDesc);
+    ASSERT_NE(buffer, kInvalidBufferHandleUVE);
+
+    EXPECT_EQ(fallbackDevice->GetBindlessSampledTextureSlotUVE(texture),
+              kInvalidBindlessResourceSlotUVE);
+    EXPECT_EQ(fallbackDevice->GetBindlessStorageTextureSlotUVE(texture),
+              kInvalidBindlessResourceSlotUVE);
+    EXPECT_EQ(fallbackDevice->GetBindlessStorageBufferSlotUVE(buffer),
+              kInvalidBindlessResourceSlotUVE);
+
+    fallbackDevice->DestroyTextureUVE(texture);
+    fallbackDevice->DestroyBufferUVE(buffer);
 }
 
 TEST_F(VulkanRenderDeviceUVETest, DepthTextureInStorageSlotFallsBackToSinkAndFrameSurvives) {

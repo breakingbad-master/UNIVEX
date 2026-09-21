@@ -26,6 +26,115 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/Engine/CMake")
 include(UveCompilerWarnings)
 include(UveBuildConfiguration)
 include(UveFormatSupport)
+include(UveShaderPipeline)
+
+option(UVE_BUILD_BUILTIN_SHADER_ARTIFACTS
+    "Expose the reproducible offline cross-backend built-in shader artifact target" OFF)
+set(UVE_SHADER_ARTIFACT_DIRECTORY "${CMAKE_BINARY_DIR}/shaders" CACHE PATH
+    "Directory for generated UniVex shader artifacts")
+if(UVE_BUILD_BUILTIN_SHADER_ARTIFACTS)
+    set(_uve_builtin_shader_targets
+        vulkan
+        android-vulkan
+        opengl
+        gles
+        d3d12
+        metal
+        ios)
+    set(_uve_builtin_shader_artifact_targets)
+    foreach(_uve_shader IN ITEMS
+        bindless_probe
+        frustum_cull
+        frustum_cull_indirect
+        mesh_skin
+        particle_simulate)
+        uve_add_shader_artifacts(
+            "uve_shader_artifact_${_uve_shader}"
+            SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/Engine/Runtime/RHI/Shader/built_in/${_uve_shader}.glsl"
+            STAGE comp
+            TARGETS ${_uve_builtin_shader_targets}
+            TARGET_DEFINES
+                vulkan=UVE_VULKAN
+                android-vulkan=UVE_VULKAN
+                gles=UVE_GLES
+            OUTPUT_DIRECTORY "${UVE_SHADER_ARTIFACT_DIRECTORY}/${_uve_shader}")
+        list(APPEND _uve_builtin_shader_artifact_targets "uve_shader_artifact_${_uve_shader}")
+    endforeach()
+
+    # Graphics shader migration covers every currently shipped basic/material, shadow,
+    # post-processing, and UI source. The canonical sources remain OpenGL-compatible for the
+    # runtime fallback, while offline Vulkan-family compiles select explicit UBO/push-constant,
+    # SSBO, and descriptor layouts. Text backends are cross-compiled from the OpenGL-semantics
+    # source branch so SPIRV-Cross can preserve nested constant-buffer layouts for HLSL/MSL;
+    # Vulkan artifacts still use the explicit descriptor contract. Each stage gets its own
+    # directory so a generated artifact can never be mistaken for the other entry point.
+    foreach(_uve_shader IN ITEMS
+        basic_2d
+        basic_3d
+        basic_3d_textured
+        particle
+        shadow_depth
+        lit_shadowed_3d
+        fullscreen_quad
+        fullscreen_copy
+        bloom_bright_pass
+        bloom_blur
+        ssao
+        ui_overlay)
+        uve_add_shader_artifacts(
+            "uve_shader_artifact_${_uve_shader}_vert"
+            SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/Engine/Runtime/RHI/Shader/built_in/${_uve_shader}.glsl"
+            STAGE vert
+            TARGETS ${_uve_builtin_shader_targets}
+            DEFINES VERTEX_SHADER
+            TARGET_DEFINES
+                vulkan=UVE_VULKAN
+                android-vulkan=UVE_VULKAN
+                gles=UVE_GLES
+            OUTPUT_DIRECTORY "${UVE_SHADER_ARTIFACT_DIRECTORY}/${_uve_shader}/vert")
+        uve_add_shader_artifacts(
+            "uve_shader_artifact_${_uve_shader}_frag"
+            SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/Engine/Runtime/RHI/Shader/built_in/${_uve_shader}.glsl"
+            STAGE frag
+            TARGETS ${_uve_builtin_shader_targets}
+            DEFINES FRAGMENT_SHADER
+            TARGET_DEFINES
+                vulkan=UVE_VULKAN
+                android-vulkan=UVE_VULKAN
+                gles=UVE_GLES
+            OUTPUT_DIRECTORY "${UVE_SHADER_ARTIFACT_DIRECTORY}/${_uve_shader}/frag")
+        list(APPEND _uve_builtin_shader_artifact_targets
+            "uve_shader_artifact_${_uve_shader}_vert"
+            "uve_shader_artifact_${_uve_shader}_frag")
+    endforeach()
+
+    # The renderer's instanced shadow program is a named cooked variant of the same authoring
+    # source. Its artifact lives below <stem>/instanced/<stage>/ so ShaderManagerUVE can select it
+    # only when the request carries the exact UVE_INSTANCED define; a base artifact can never be
+    # silently reused for a different storage-buffer interface.
+    foreach(_uve_stage IN ITEMS vert frag)
+        set(_uve_stage_define VERTEX_SHADER)
+        if(_uve_stage STREQUAL "frag")
+            set(_uve_stage_define FRAGMENT_SHADER)
+        endif()
+        uve_add_shader_artifacts(
+            "uve_shader_artifact_shadow_depth_instanced_${_uve_stage}"
+            SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/Engine/Runtime/RHI/Shader/built_in/shadow_depth.glsl"
+            STAGE ${_uve_stage}
+            TARGETS ${_uve_builtin_shader_targets}
+            DEFINES ${_uve_stage_define} UVE_INSTANCED
+            TARGET_DEFINES
+                vulkan=UVE_VULKAN
+                android-vulkan=UVE_VULKAN
+                gles=UVE_GLES
+            OUTPUT_DIRECTORY "${UVE_SHADER_ARTIFACT_DIRECTORY}/shadow_depth/instanced/${_uve_stage}")
+        list(APPEND _uve_builtin_shader_artifact_targets
+            "uve_shader_artifact_shadow_depth_instanced_${_uve_stage}")
+    endforeach()
+
+    add_custom_target(uve_builtin_shader_artifacts)
+    add_dependencies(uve_builtin_shader_artifacts ${_uve_builtin_shader_artifact_targets})
+endif()
 
 include(FetchContent)
 set(JSON_BuildTests OFF CACHE INTERNAL "")

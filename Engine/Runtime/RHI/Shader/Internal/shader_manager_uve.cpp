@@ -4,10 +4,13 @@
 #include "uve/rhi_shader/shader_manager_uve.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <filesystem>
 #include <mutex>
+#include <nlohmann/json.hpp>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <unordered_map>
 #include <utility>
@@ -21,6 +24,16 @@
 #include "uve/threading/job_counter_uve.h"
 
 namespace UVE::Render::Shader {
+
+namespace {
+
+struct CookedShaderArtifactUVE {
+    std::string virtualPath;
+    std::string manifestVirtualPath;
+    std::vector<std::byte> bytes;
+};
+
+} // namespace
 
 struct ShaderManagerUVE::ImplUVE {
     Threading::IThreadPoolUVE& threadPool;
@@ -37,6 +50,7 @@ struct ShaderManagerUVE::ImplUVE {
         std::shared_ptr<ShaderSourceUVE> target;
         ShaderSourceCompileDescUVE desc;
         Detail::PreprocessResultUVE preprocess;
+        std::optional<CookedShaderArtifactUVE> cookedArtifact;
     };
     std::vector<SourceJobUVE> completedSourceJobs; // guarded by mutex - written from worker threads
 
@@ -119,6 +133,259 @@ namespace {
     defines.emplace_back(ShaderStageDefineNameUVE(stage), "1");
     defines.insert(defines.end(), extraDefines.begin(), extraDefines.end());
     return defines;
+}
+
+[[nodiscard]] const char* ShaderArtifactStageDirectoryUVE(ShaderStageUVE stage) noexcept {
+    switch (stage) {
+        case ShaderStageUVE::Vertex:
+            return "vert";
+        case ShaderStageUVE::Fragment:
+            return "frag";
+        case ShaderStageUVE::Compute:
+            return "comp";
+        case ShaderStageUVE::Geometry:
+            return "geom";
+    }
+    return "";
+}
+
+struct CookedArtifactFormatUVE {
+    const char* target = nullptr;
+    const char* extension = nullptr;
+};
+
+[[nodiscard]] std::optional<CookedArtifactFormatUVE> GetCookedArtifactFormatUVE(
+    const IRenderDeviceUVE& renderDevice) noexcept {
+    const std::string_view backend = renderDevice.GetBackendNameUVE();
+    if (backend.starts_with("Vulkan")) {
+#if defined(__ANDROID__)
+        return CookedArtifactFormatUVE{"android-vulkan", ".spv"};
+#else
+        return CookedArtifactFormatUVE{"vulkan", ".spv"};
+#endif
+    }
+#if defined(__ANDROID__)
+    if (backend == "OpenGL") {
+        return CookedArtifactFormatUVE{"gles", ".glsl"};
+    }
+#else
+    if (backend == "OpenGL") {
+        return CookedArtifactFormatUVE{"opengl", ".glsl"};
+    }
+#endif
+    if (backend.starts_with("D3D12")) {
+        return CookedArtifactFormatUVE{"d3d12", ".hlsl"};
+    }
+    if (backend.starts_with("Metal")) {
+        return CookedArtifactFormatUVE{"metal", ".metal"};
+    }
+    return std::nullopt;
+}
+
+[[nodiscard]] std::optional<std::string> GetCookedArtifactVariantUVE(
+    const ShaderSourceCompileDescUVE& desc) {
+    if (desc.extraDefines.empty()) {
+        return std::string{};
+    }
+    // Built-in instancing is the first supported cooked variant. Unknown per-request defines
+    // must never reuse the base artifact: a mismatched SPIR-V module is worse than a logged
+    // source-compile failure. Additional variants get an explicit directory key here rather than
+    // smuggling defines into a filename or relying on unordered map iteration.
+    if (desc.extraDefines.size() == 1U && desc.extraDefines.front().first == "UVE_INSTANCED" &&
+        (desc.extraDefines.front().second == "1" || desc.extraDefines.front().second == "true")) {
+        return std::string{"instanced"};
+    }
+    return std::nullopt;
+}
+
+[[nodiscard]] std::vector<std::string> GetCookedArtifactDefinesUVE(
+    ShaderStageUVE stage, const ShaderSourceCompileDescUVE& desc) {
+    std::vector<std::string> defines;
+    switch (stage) {
+        case ShaderStageUVE::Vertex:
+            defines.emplace_back("VERTEX_SHADER");
+            break;
+        case ShaderStageUVE::Fragment:
+            defines.emplace_back("FRAGMENT_SHADER");
+            break;
+        case ShaderStageUVE::Compute:
+            defines.emplace_back("COMPUTE_SHADER");
+            break;
+        case ShaderStageUVE::Geometry:
+            defines.emplace_back("GEOMETRY_SHADER");
+            break;
+    }
+    for (const auto& [name, value] : desc.extraDefines) {
+        static_cast<void>(value);
+        defines.push_back(name);
+    }
+    return defines;
+}
+
+[[nodiscard]] std::vector<std::string> GetCookedArtifactTargetDefinesUVE(std::string_view target) {
+    if (target == "vulkan" || target == "android-vulkan") {
+        return {"UVE_VULKAN"};
+    }
+    if (target == "gles") {
+        return {"UVE_GLES"};
+    }
+    return {};
+}
+
+[[nodiscard]] std::string GetAuthoringSourceFingerprintUVE(
+    ShaderManagerUVE::ImplUVE& impl, const ShaderSourceCompileDescUVE& desc) {
+    std::string source = desc.embeddedFallbackSourceCode;
+    if (!desc.virtualFilePath.empty() && impl.fileSystem.HasFileUVE(desc.virtualFilePath)) {
+        const std::optional<std::vector<std::byte>> sourceBytes = impl.fileSystem.ReadFileUVE(desc.virtualFilePath);
+        if (sourceBytes.has_value()) {
+            source.assign(reinterpret_cast<const char*>(sourceBytes->data()), sourceBytes->size());
+        }
+    }
+    const std::uint64_t hash = Detail::ComputeFnv1aHashUVE(source);
+    constexpr char kHexDigits[] = "0123456789abcdef";
+    std::string fingerprint(16U, '0');
+    for (std::size_t index = 0U; index < fingerprint.size(); ++index) {
+        const std::size_t shift = (fingerprint.size() - 1U - index) * 4U;
+        fingerprint[index] = kHexDigits[(hash >> shift) & 0x0FU];
+    }
+    return fingerprint;
+}
+
+[[nodiscard]] bool ValidateCookedArtifactManifestUVE(
+    ShaderManagerUVE::ImplUVE& impl, const ShaderSourceCompileDescUVE& desc,
+    const CookedArtifactFormatUVE& format, std::string_view stageDirectory,
+    std::string_view artifactVirtualPath) {
+    const std::size_t lastSlash = artifactVirtualPath.rfind('/');
+    if (lastSlash == std::string_view::npos) {
+        return false;
+    }
+    const std::string manifestVirtualPath =
+        std::string(artifactVirtualPath.substr(0, lastSlash)) + "/shader_manifest.json";
+    if (!impl.fileSystem.HasFileUVE(manifestVirtualPath)) {
+        return false;
+    }
+    const std::optional<std::vector<std::byte>> manifestBytes = impl.fileSystem.ReadFileUVE(manifestVirtualPath);
+    if (!manifestBytes.has_value() || manifestBytes->empty()) {
+        return false;
+    }
+
+    try {
+        const std::string manifestText(reinterpret_cast<const char*>(manifestBytes->data()), manifestBytes->size());
+        const nlohmann::json manifest = nlohmann::json::parse(manifestText);
+        if (manifest.value("format", 0) != 3 || !manifest.contains("toolchain") ||
+            !manifest.at("toolchain").is_object() || !manifest.contains("artifacts") ||
+            !manifest.at("artifacts").is_array()) {
+            return false;
+        }
+        const nlohmann::json& toolchain = manifest.at("toolchain");
+        if (!toolchain.contains("glslang_validator") || !toolchain.contains("spirv_cross") ||
+            !toolchain.at("glslang_validator").is_object() || !toolchain.at("spirv_cross").is_object()) {
+            return false;
+        }
+
+        const std::vector<std::string> expectedDefines = GetCookedArtifactDefinesUVE(desc.stage, desc);
+        const std::vector<std::string> expectedTargetDefines =
+            GetCookedArtifactTargetDefinesUVE(format.target);
+        const std::string expectedEntryPoint = desc.entryPointName.empty() ? "main" : desc.entryPointName;
+        const std::string expectedSourceFingerprint = GetAuthoringSourceFingerprintUVE(impl, desc);
+        const std::filesystem::path expectedArtifactName(artifactVirtualPath);
+
+        for (const nlohmann::json& artifact : manifest.at("artifacts")) {
+            if (!artifact.is_object() || artifact.value("stage", "") != stageDirectory ||
+                artifact.value("entry_point", "") != expectedEntryPoint ||
+                artifact.value("source_fnv1a64", "") != expectedSourceFingerprint ||
+                !artifact.contains("source_sha256") || !artifact.at("source_sha256").is_string()) {
+                continue;
+            }
+            if (artifact.value("defines", nlohmann::json::array()) != expectedDefines) {
+                continue;
+            }
+            const nlohmann::json targetDefines =
+                artifact.value("target_defines", nlohmann::json::object());
+            if (!targetDefines.is_object() ||
+                targetDefines.value(format.target, nlohmann::json::array()) != expectedTargetDefines) {
+                continue;
+            }
+            const nlohmann::json artifacts = artifact.value("artifacts", nlohmann::json::object());
+            if (!artifacts.is_object() || !artifacts.contains(format.target) ||
+                !artifacts.at(format.target).is_string()) {
+                continue;
+            }
+            const std::filesystem::path declaredArtifactName(artifacts.at(format.target).get<std::string>());
+            if (declaredArtifactName.filename() != expectedArtifactName.filename()) {
+                continue;
+            }
+            return true;
+        }
+    } catch (const nlohmann::json::exception&) {
+        return false;
+    }
+    return false;
+}
+
+[[nodiscard]] std::optional<CookedShaderArtifactUVE> TryReadCookedArtifactUVE(
+    ShaderManagerUVE::ImplUVE& impl, const ShaderSourceCompileDescUVE& desc) {
+    if (!impl.config.preferCookedArtifactsUVE || impl.config.cookedArtifactMountPrefixUVE.empty() ||
+        desc.virtualFilePath.empty()) {
+        return std::nullopt;
+    }
+    const std::optional<std::string> variant = GetCookedArtifactVariantUVE(desc);
+    if (!variant.has_value()) {
+        return std::nullopt;
+    }
+    const std::optional<CookedArtifactFormatUVE> format = GetCookedArtifactFormatUVE(impl.renderDevice);
+    if (variant->compare("instanced") == 0 &&
+        !impl.renderDevice.GetCapabilitiesUVE().supportsStorageBuffers) {
+        // The named shadow variant reads SSBOs. GLES 3.0 and the current Android fallback
+        // deliberately report no storage-buffer capability, so selecting its ESSL 3.10 text
+        // artifact would compile but bind nothing (BindStorageBufferUVE is a no-op there). Let
+        // the caller's ordinary source/fallback path choose the non-instanced shadow program.
+        return std::nullopt;
+    }
+    const char* const stageDirectory = ShaderArtifactStageDirectoryUVE(desc.stage);
+    if (!format.has_value() || stageDirectory[0] == '\0') {
+        return std::nullopt;
+    }
+    const std::filesystem::path sourcePath(desc.virtualFilePath);
+    const std::string stem = sourcePath.stem().string();
+    if (stem.empty() || stem == "." || stem == "..") {
+        return std::nullopt;
+    }
+    std::string virtualPath = impl.config.cookedArtifactMountPrefixUVE;
+    if (!virtualPath.empty() && virtualPath.back() != '/') {
+        virtualPath += '/';
+    }
+    virtualPath += stem;
+    virtualPath += '/';
+    if (!variant->empty()) {
+        virtualPath += *variant;
+        virtualPath += '/';
+    }
+    virtualPath += stageDirectory;
+    virtualPath += '/';
+    virtualPath += stem;
+    virtualPath += '.';
+    virtualPath += format->target;
+    virtualPath += format->extension;
+
+    // HasFileUVE is intentional here: ReadFileUVE logs a hard error for a missing mount, but a
+    // missing cooked tree is the normal source-only development fallback and must stay quiet.
+    if (!impl.fileSystem.HasFileUVE(virtualPath) ||
+        !ValidateCookedArtifactManifestUVE(impl, desc, *format, stageDirectory, virtualPath)) {
+        // A present-but-stale or malformed artifact is treated exactly like a missing one. The
+        // source path below remains the safe fallback, while the manifest prevents a build-tree
+        // artifact from silently outliving its authoring source or target policy.
+        return std::nullopt;
+    }
+    const std::optional<std::vector<std::byte>> bytes = impl.fileSystem.ReadFileUVE(virtualPath);
+    if (!bytes.has_value() || bytes->empty()) {
+        return std::nullopt;
+    }
+    const std::size_t lastSlash = virtualPath.rfind('/');
+    const std::string manifestVirtualPath = lastSlash == std::string::npos
+        ? std::string{}
+        : virtualPath.substr(0, lastSlash) + "/shader_manifest.json";
+    return CookedShaderArtifactUVE{std::move(virtualPath), manifestVirtualPath, *bytes};
 }
 
 [[nodiscard]] std::filesystem::file_time_type GetRealFileWriteTimeUVE(Asset::IFileSystemUVE& fileSystem,
@@ -233,13 +500,38 @@ void ShaderManagerUVE::SubmitSourceCompileJobUVE(ImplUVE& impl, const std::share
     }
     impl.threadPool.SubmitUVE(
         [&impl, target, desc]() {
-            const std::vector<std::pair<std::string, std::string>> defines =
-                BuildDefinesUVE(desc.stage, impl.config.injectDebugDefineUVE, desc.extraDefines);
-            Detail::PreprocessResultUVE preprocess = Detail::PreprocessShaderSourceUVE(
-                impl.fileSystem, desc.virtualFilePath, desc.embeddedFallbackSourceCode, defines);
+            std::optional<CookedShaderArtifactUVE> cookedArtifact = TryReadCookedArtifactUVE(impl, desc);
+            Detail::PreprocessResultUVE preprocess;
+            if (cookedArtifact.has_value()) {
+                // RHI ShaderDescUVE deliberately uses one byte-preserving string field for both
+                // GL text and Vulkan SPIR-V. Keep the artifact bytes intact; an embedded NUL is
+                // valid in the Vulkan path and GL artifacts are ordinary UTF-8 text.
+                preprocess.success = true;
+                preprocess.resolvedSource.assign(
+                    reinterpret_cast<const char*>(cookedArtifact->bytes.data()), cookedArtifact->bytes.size());
+                preprocess.dependencyClosure.push_back(cookedArtifact->virtualPath);
+                preprocess.fileIndexTable.push_back(cookedArtifact->virtualPath);
+                if (!cookedArtifact->manifestVirtualPath.empty()) {
+                    preprocess.dependencyClosure.push_back(cookedArtifact->manifestVirtualPath);
+                    preprocess.fileIndexTable.push_back(cookedArtifact->manifestVirtualPath);
+                }
+                if (!desc.virtualFilePath.empty() && impl.fileSystem.HasFileUVE(desc.virtualFilePath)) {
+                    // Keep authoring-source changes visible in a development mount. A changed
+                    // source invalidates the manifest fingerprint on the next job and safely
+                    // selects source fallback until the cooked package is rebuilt.
+                    preprocess.dependencyClosure.push_back(desc.virtualFilePath);
+                    preprocess.fileIndexTable.push_back(desc.virtualFilePath);
+                }
+            } else {
+                const std::vector<std::pair<std::string, std::string>> defines =
+                    BuildDefinesUVE(desc.stage, impl.config.injectDebugDefineUVE, desc.extraDefines);
+                preprocess = Detail::PreprocessShaderSourceUVE(
+                    impl.fileSystem, desc.virtualFilePath, desc.embeddedFallbackSourceCode, defines);
+            }
 
             std::lock_guard<std::mutex> lock(impl.mutex);
-            impl.completedSourceJobs.push_back(ImplUVE::SourceJobUVE{target, desc, std::move(preprocess)});
+            impl.completedSourceJobs.push_back(
+                ImplUVE::SourceJobUVE{target, desc, std::move(preprocess), std::move(cookedArtifact)});
         },
         impl.pendingJobs);
 }
@@ -277,6 +569,10 @@ void ShaderManagerUVE::DrainCompletedSourceJobsUVE(ImplUVE& impl) {
                 }
                 source.m_handle = newHandle;
                 source.m_resolvedSource = job.preprocess.resolvedSource;
+                source.m_usedCookedArtifact = job.cookedArtifact.has_value();
+                source.m_cookedArtifactVirtualPath = job.cookedArtifact.has_value()
+                    ? job.cookedArtifact->virtualPath
+                    : std::string{};
                 source.m_contentHash = ComputeSourceContentHashUVE(impl.renderDevice, job.preprocess.resolvedSource,
                                                                     job.desc.stage, job.desc.entryPointName);
                 source.m_dependencyClosure = job.preprocess.dependencyClosure;

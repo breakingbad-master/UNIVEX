@@ -67,6 +67,7 @@ public:
     void SubmitUVE(std::unique_ptr<ICommandBufferUVE> commandBuffer) override;
     void PresentUVE() override;
 
+    [[nodiscard]] RenderDeviceCapabilitiesUVE GetCapabilitiesUVE() const noexcept override;
     [[nodiscard]] std::string_view GetBackendNameUVE() const noexcept override;
 
     /// Returns true only when construction found a valid current context and loaded every GL

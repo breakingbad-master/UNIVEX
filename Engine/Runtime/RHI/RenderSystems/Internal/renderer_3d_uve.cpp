@@ -202,6 +202,10 @@ struct UIVertexUVE {
 inline constexpr std::uint32_t kInstanceTransformSlotUVE = 0U;
 inline constexpr std::uint32_t kInstanceNormalTransformSlotUVE = 1U;
 inline constexpr std::uint32_t kInstanceBaseSlotUVE = 2U;
+// shadow_depth.glsl has only two reflected storage bindings in its Vulkan variant (model and
+// base index), so its second slot is 1. The main lit shader has the normal-transform binding and
+// therefore keeps the three-buffer 0/1/2 contract above.
+inline constexpr std::uint32_t kShadowInstanceBaseSlotUVE = 1U;
 
 /// The most instances one frame may upload. Bounds the per-frame upload the same way
 /// kMaximumParticleGpuDrawCommandsUVE bounds particles; a batch that would exceed it is recorded
@@ -1243,7 +1247,7 @@ struct Renderer3DUVE::ImplUVE {
                         }
                         instancedShadowProgram->ApplyToUVE(commandBuffer);
                         commandBuffer.BindStorageBufferUVE(instanceTransformBuffer, kInstanceTransformSlotUVE);
-                        commandBuffer.BindStorageBufferUVE(instanceBaseBuffer, kInstanceBaseSlotUVE);
+                        commandBuffer.BindStorageBufferUVE(instanceBaseBuffer, kShadowInstanceBaseSlotUVE);
                         commandBuffer.BindVertexBufferUVE(meshResources.vertexBuffer);
                         commandBuffer.BindIndexBufferUVE(meshResources.indexBuffer);
                         commandBuffer.DrawIndexedUVE(meshResources.indexCount,

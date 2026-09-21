@@ -16,7 +16,10 @@
 // equally small and self-contained; anything larger belongs behind IRenderDeviceUVE instead.
 #if defined(__ANDROID__)
 #include <GLES3/gl3.h>
+#include <GLES3/gl31.h>
 #include <GLES2/gl2ext.h>
+// GLES exposes the debug callback through KHR_debug rather than desktop GL's core typedef.
+using PFNGLDEBUGMESSAGECALLBACKPROC = PFNGLDEBUGMESSAGECALLBACKKHRPROC;
 #else
 #include <GL/gl.h>
 #include <GL/glext.h>
@@ -37,9 +40,13 @@ struct GlFunctionsUVE {
     PFNGLBINDBUFFERPROC glBindBuffer = nullptr;
     PFNGLBUFFERDATAPROC glBufferData = nullptr;
     PFNGLBUFFERSUBDATAPROC glBufferSubData = nullptr;
+#if !defined(__ANDROID__)
     // CS3: the read direction of glBufferSubData, backing IRenderDeviceUVE::ReadbackBufferUVE.
-    // Core since GL 1.5 like its write sibling, so it joins the IsCompleteUVE() core set.
+    // Core since GL 1.5 like its write sibling, so it joins the IsCompleteUVE() core set. GLES
+    // has no glGetBufferSubData entry point; its backend reports readback unsupported rather than
+    // pretending this desktop-only function exists.
     PFNGLGETBUFFERSUBDATAPROC glGetBufferSubData = nullptr;
+#endif
     PFNGLBINDBUFFERBASEPROC glBindBufferBase = nullptr;
 
     // M5a compute pair (GL 4.3+). Deliberately NOT part of the IsLoadedUVE() core set: contexts
@@ -102,6 +109,17 @@ struct GlFunctionsUVE {
     PFNGLGETACTIVEUNIFORMPROC glGetActiveUniform = nullptr;
     PFNGLGETPROGRAMBINARYPROC glGetProgramBinary = nullptr;
     PFNGLPROGRAMBINARYPROC glProgramBinary = nullptr;
+
+#if !defined(__ANDROID__)
+    // GL 4.3 shader-storage reflection. These stay optional so the baseline renderer can still
+    // initialize on a context that exposes the older graphics function set; a context that
+    // actually uses SSBOs must pass the non-null capability gate before binding one. The RHI
+    // presents storage slots as logical ascending slots, while GLSL may declare a sparse binding
+    // (the built-in shadow variant is binding 0 plus binding 2 on OpenGL), so the pipeline uses
+    // this entry point to map logical slots back to physical GL binding points.
+    PFNGLGETPROGRAMINTERFACEIVPROC glGetProgramInterfaceiv = nullptr;
+    PFNGLGETPROGRAMRESOURCEIVPROC glGetProgramResourceiv = nullptr;
+#endif
 
     // GL_KHR_debug (core since desktop GL 4.3; a common but not universally guaranteed GLES
     // extension - this engine's Android baseline is a fixed GLES 3.0 context, so this is expected

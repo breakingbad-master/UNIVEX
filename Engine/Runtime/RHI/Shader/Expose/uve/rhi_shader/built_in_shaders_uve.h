@@ -14,7 +14,9 @@ namespace UVE::Render::Shader::BuiltIn {
 /// source twice, injecting the matching macro each time). Every constant here is the embedded
 /// fallback ShaderManagerUVE transparently uses when the corresponding virtual path isn't
 /// reachable (see ShaderProgramDescUVE's doc comment) — kept byte-identical to its `.glsl` file
-/// by convention, enforced by tests/render/shader/built_in_shaders_parity_uve_tests.cpp.
+/// by convention, enforced by tests/render/shader/built_in_shaders_parity_uve_tests.cpp. The
+/// first graphics pair also has offline cooked stage artifacts; their Vulkan target variant uses
+/// the explicit push-constant layout selected by UVE_VULKAN while the fallback stays OpenGL-safe.
 
 inline constexpr std::string_view kBasic2DVirtualPath = "shaders/basic_2d.glsl";
 extern const std::string_view kBasic2DSource;

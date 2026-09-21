@@ -40,16 +40,137 @@ jobs:
             libjpeg-dev \
             xvfb \
             libvulkan1 \
-            mesa-vulkan-drivers
+            mesa-vulkan-drivers \
+            glslang-tools \
+            spirv-tools \
+            spirv-cross \
+            vulkan-tools \
+            vulkan-validationlayers
+
+      - name: Report shader toolchain
+        run: |
+          glslangValidator --version
+          spirv-val --version
+          spirv-cross --version || true
 
       - name: Math boundary check
         run: python3 Engine/Tools/check_math_boundary.py
 
       - name: Configure
-        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DUVE_BUILD_TESTS=ON
+        run: >-
+          cmake -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Debug
+          -DUVE_BUILD_TESTS=ON
+          -DUVE_BUILD_BUILTIN_SHADER_ARTIFACTS=ON
 
       - name: Build
         run: cmake --build build --parallel "$(nproc)"
+
+      - name: Build and validate offline shader artifacts
+        run: |
+          cmake --build build --target uve_builtin_shader_artifacts --parallel "$(nproc)"
+          find build/shaders -type f \( \
+            -name '*.vulkan.spv' -o \
+            -name '*.android-vulkan.spv' -o \
+            -name '*.intermediate.vulkan.spv' -o \
+            -name '*.intermediate.android-vulkan.spv' \) -print0 |
+            while IFS= read -r -d '' shader; do
+            spirv-val --target-env vulkan1.2 "$shader"
+          done
+          find build/shaders -type f -name '*.intermediate.*.spv' \
+            ! -name '*.intermediate.vulkan.spv' \
+            ! -name '*.intermediate.android-vulkan.spv' \
+            -print0 | while IFS= read -r -d '' shader; do
+            # OpenGL-semantics intermediates feed the OpenGL/GLES, HLSL, and MSL cross-backends.
+            spirv-val --target-env opengl4.5 "$shader"
+          done
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          for stem in (
+              "basic_2d", "basic_3d", "basic_3d_textured", "particle", "shadow_depth", "lit_shadowed_3d",
+              "fullscreen_quad", "fullscreen_copy", "bloom_bright_pass", "bloom_blur", "ssao", "ui_overlay"
+          ):
+              for stage in ("vert", "frag"):
+                  root = Path("build/shaders") / stem / stage
+                  manifest = json.loads((root / "shader_manifest.json").read_text(encoding="utf-8"))
+                  artifact = manifest["artifacts"][0]
+                  if manifest.get("format") != 3 or not isinstance(artifact.get("source_fnv1a64"), str):
+                      raise SystemExit(f"{stem}/{stage}: runtime-verifiable manifest metadata is missing")
+                  if artifact["target_defines"].get("vulkan") != ["UVE_VULKAN"]:
+                      raise SystemExit(f"{stem}/{stage}: Vulkan target define is not recorded")
+                  if artifact["target_defines"].get("gles") != ["UVE_GLES"]:
+                      raise SystemExit(f"{stem}/{stage}: GLES target define is not recorded")
+                  for target, artifact_path in artifact["artifacts"].items():
+                      if not Path(artifact_path).is_file() or Path(artifact_path).stat().st_size == 0:
+                          raise SystemExit(f"{stem}/{stage}: missing/empty {target} artifact")
+
+          for stage in ("vert", "frag"):
+              root = Path("build/shaders") / "shadow_depth" / "instanced" / stage
+              manifest = json.loads((root / "shader_manifest.json").read_text(encoding="utf-8"))
+              artifact = manifest["artifacts"][0]
+              if manifest.get("format") != 3 or not isinstance(artifact.get("source_fnv1a64"), str):
+                  raise SystemExit(f"shadow_depth/instanced/{stage}: runtime-verifiable manifest metadata is missing")
+              if "UVE_INSTANCED" not in artifact["defines"]:
+                  raise SystemExit(f"shadow_depth/instanced/{stage}: instancing define is not recorded")
+              if artifact["target_defines"].get("vulkan") != ["UVE_VULKAN"]:
+                  raise SystemExit(f"shadow_depth/instanced/{stage}: Vulkan target define is not recorded")
+              if artifact["target_defines"].get("gles") != ["UVE_GLES"]:
+                  raise SystemExit(f"shadow_depth/instanced/{stage}: GLES target define is not recorded")
+              for target, artifact_path in artifact["artifacts"].items():
+                  if not Path(artifact_path).is_file() or Path(artifact_path).stat().st_size == 0:
+                      raise SystemExit(
+                          f"shadow_depth/instanced/{stage}: missing/empty {target} artifact"
+                      )
+              gles_source = Path(artifact["artifacts"]["gles"]).read_text(encoding="utf-8")
+              if not gles_source.startswith("#version 310 es") or "buffer Instance" not in gles_source:
+                  raise SystemExit(
+                      f"shadow_depth/instanced/{stage}: GLES SSBO variant must be ESSL 3.10"
+                  )
+
+          bindless_manifest = json.loads(
+              (Path("build/shaders") / "bindless_probe" / "shader_manifest.json").read_text(encoding="utf-8")
+          )
+          bindless_artifact = bindless_manifest["artifacts"][0]
+          if bindless_manifest.get("format") != 3 or not isinstance(bindless_artifact.get("source_fnv1a64"), str):
+              raise SystemExit("bindless_probe: runtime-verifiable manifest metadata is missing")
+          if bindless_artifact["target_defines"].get("vulkan") != ["UVE_VULKAN"]:
+              raise SystemExit("bindless_probe: Vulkan target define is not recorded")
+          if bindless_artifact["target_defines"].get("gles") != ["UVE_GLES"]:
+              raise SystemExit("bindless_probe: GLES fallback target define is not recorded")
+          bindless_gles = Path(bindless_artifact["artifacts"]["gles"])
+          if not bindless_gles.is_file() or not bindless_gles.read_text(encoding="utf-8").startswith("#version 310 es"):
+              raise SystemExit("bindless_probe: GLES smoke artifact is not ESSL 3.10")
+          print("Validated cooked graphics stage artifacts, instanced shadow variants, bindless GLES fallback, and target policy manifests")
+          PY
+          spirv-cross build/shaders/bindless_probe/bindless_probe.vulkan.spv --reflect \
+            > build/shaders/bindless_probe/bindless_probe.reflection.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          reflection_path = Path("build/shaders/bindless_probe/bindless_probe.reflection.json")
+          reflection = json.loads(reflection_path.read_text(encoding="utf-8"))
+          expected = {
+              "textures": (1, 0),
+              "images": (1, 1),
+              "ssbos": (1, 2),
+          }
+          for resource_kind, (expected_set, expected_binding) in expected.items():
+              resources = reflection.get(resource_kind, [])
+              if not any(
+                  resource.get("set") == expected_set
+                  and resource.get("binding") == expected_binding
+                  for resource in resources
+              ):
+                  raise SystemExit(
+                      f"bindless_probe reflection missing {resource_kind} "
+                      f"set {expected_set}, binding {expected_binding}: {resources}"
+                  )
+          print("Validated bindless reflection: set 1 sampled-image, storage-image, "
+                "and storage-buffer bindings 0, 1, and 2")
+          PY
 
       - name: Test
         # Parallel, and both things that blocked it are fixed: every test process gets its own
@@ -58,12 +179,48 @@ jobs:
         # leaves a worker holding the last reference to something it is about to outlive.
         run: xvfb-run -a ctest --test-dir build --output-on-failure -j"$(nproc)"
 
+      - name: Print test failure log
+        if: failure()
+        run: |
+          log=build/Testing/Temporary/LastTest.log
+          cat "$log"
+          {
+            echo "## CTest failure log"
+            echo '```text'
+            tail -n 500 "$log"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          failed_tests=build/Testing/Temporary/LastTestsFailed.log
+          if [ -f "$failed_tests" ]; then
+            echo "## Failed test names" >> "$GITHUB_STEP_SUMMARY"
+            echo '```text' >> "$GITHUB_STEP_SUMMARY"
+            cat "$failed_tests" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            while IFS= read -r failed_test; do
+              [ -z "$failed_test" ] && continue
+              encoded_test=$(printf '%s' "$failed_test" | python3 -c 'import sys; print(sys.stdin.read().replace("%", "%25").replace("\\n", "%0A").replace("\\r", "%0D"), end="")')
+              echo "::error title=CTest failed test::$encoded_test"
+            done < "$failed_tests"
+          fi
+
+      - name: Run Vulkan tests under the Khronos validation layer
+        # The normal ctest pass proves behavior; this second pass loads the validation layer
+        # through the loader environment without baking a validation dependency into shipping
+        # engine code. vulkaninfo proves the layer manifest is discoverable, and the focused
+        # device suite exercises the actual UniVex instance/device/swapchain path under it.
+        working-directory: build
+        env:
+          VK_INSTANCE_LAYERS: VK_LAYER_KHRONOS_validation
+        run: |
+          vulkaninfo --summary
+          xvfb-run -a ./Test/uve_core_tests --gtest_filter='VulkanRenderDeviceUVETest.*'
+
       - name: Verify the Vulkan device tests actually ran
         # These cases skip themselves when no Vulkan device is present, which would leave
         # the backend untested while CI stayed green. Fail loudly if the runner loses it.
         working-directory: build
         run: |
-          ./Test/uve_core_tests --gtest_filter='VulkanRenderDeviceUVETest.*' | tee /tmp/vulkan.log
+          xvfb-run -a ./Test/uve_core_tests --gtest_filter='VulkanRenderDeviceUVETest.*' | tee /tmp/vulkan.log
           executed=$(grep -c '^\[       OK \] VulkanRenderDeviceUVETest' /tmp/vulkan.log)
           echo "Vulkan device cases executed: $executed"
           if [ "$executed" -lt 17 ]; then

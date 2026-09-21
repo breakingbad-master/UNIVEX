@@ -3,6 +3,7 @@
 
 #include "uve/rhi_opengl/gl_render_device_uve.h"
 
+#include <algorithm>
 #include <limits>
 #include <string>
 
@@ -236,6 +237,43 @@ void ReflectPipelineUniformsUVE(
     }
 }
 
+#if !defined(__ANDROID__)
+/// Maps the RHI's logical SSBO slots to the physical GL binding points declared by the linked
+/// program. Vulkan reflection already sorts storage resources by binding; OpenGL normally uses
+/// the same numbers directly, but the built-in shadow instanced variant deliberately preserves
+/// its historical 0/2 declarations. A logical-slot map keeps that source contract compatible
+/// with the renderer's portable 0/1 binding calls.
+void ReflectStorageBindingSlotsUVE(const Detail::GlFunctionsUVE& gl, const GLuint glProgram,
+                                   std::vector<std::uint32_t>& outSlots) {
+    outSlots.clear();
+    if (gl.glGetProgramInterfaceiv == nullptr || gl.glGetProgramResourceiv == nullptr) {
+        return;
+    }
+    GLint activeBlockCount = 0;
+    gl.glGetProgramInterfaceiv(glProgram, GL_SHADER_STORAGE_BLOCK, GL_ACTIVE_RESOURCES,
+                               &activeBlockCount);
+    if (activeBlockCount <= 0) {
+        return;
+    }
+
+    std::vector<std::uint32_t> physicalBindings;
+    physicalBindings.reserve(static_cast<std::size_t>(activeBlockCount));
+    constexpr GLenum kBindingProperty = GL_BUFFER_BINDING;
+    for (GLint blockIndex = 0; blockIndex < activeBlockCount; ++blockIndex) {
+        GLint binding = -1;
+        GLsizei propertyCount = 0;
+        gl.glGetProgramResourceiv(glProgram, GL_SHADER_STORAGE_BLOCK,
+                                  static_cast<GLuint>(blockIndex), 1U, &kBindingProperty, 1U,
+                                  &propertyCount, &binding);
+        if (propertyCount > 0 && binding >= 0) {
+            physicalBindings.push_back(static_cast<std::uint32_t>(binding));
+        }
+    }
+    std::sort(physicalBindings.begin(), physicalBindings.end());
+    outSlots = std::move(physicalBindings);
+}
+#endif
+
 [[nodiscard]] std::string GetShaderInfoLogUVE(const Detail::GlFunctionsUVE& gl, GLuint shader) {
     GLint logLength = 0;
     gl.glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &logLength);
@@ -286,12 +324,11 @@ GlRenderDeviceUVE::GlRenderDeviceUVE(Window::IWindowManagerUVE& windowManager)
 #if !defined(__ANDROID__)
         // GL_MAJOR_VERSION/GL_MINOR_VERSION are valid integer queries from GL 3.0 onward, which
         // this engine's desktop baseline already requires - safe to call unconditionally here.
-        GLint contextMajorVersion = 0;
-        GLint contextMinorVersion = 0;
-        glGetIntegerv(GL_MAJOR_VERSION, &contextMajorVersion);
-        glGetIntegerv(GL_MINOR_VERSION, &contextMinorVersion);
+        glGetIntegerv(GL_MAJOR_VERSION, &m_impl->state.contextMajorVersion);
+        glGetIntegerv(GL_MINOR_VERSION, &m_impl->state.contextMinorVersion);
         m_impl->state.supportsComputeShadersUVE =
-            contextMajorVersion > 4 || (contextMajorVersion == 4 && contextMinorVersion >= 3);
+            m_impl->state.contextMajorVersion > 4 ||
+            (m_impl->state.contextMajorVersion == 4 && m_impl->state.contextMinorVersion >= 3);
         if (m_impl->state.supportsComputeShadersUVE) {
             // M2f: SSBO binding points share compute's GL 4.3 floor; queried once here so
             // BindStorageBufferUVE validates slots against the real driver limit.
@@ -426,6 +463,14 @@ bool GlRenderDeviceUVE::UpdateBufferUVE(BufferHandleUVE buffer, std::span<const 
 
 bool GlRenderDeviceUVE::ReadbackBufferUVE(BufferHandleUVE buffer, std::span<std::byte> outData,
                                             std::uint64_t offsetBytes) {
+#if defined(__ANDROID__)
+    static_cast<void>(buffer);
+    static_cast<void>(outData);
+    static_cast<void>(offsetBytes);
+    UVE_WARNING("GlRenderDeviceUVE: GLES does not expose glGetBufferSubData; "
+                "ReadbackBufferUVE is unsupported on the Android OpenGL fallback");
+    return false;
+#else
     const auto it = m_impl->state.buffers.find(buffer.value);
     if (it == m_impl->state.buffers.end()) {
         UVE_ERROR("GlRenderDeviceUVE: ReadbackBufferUVE called with an unknown handle ({})", buffer.value);
@@ -461,6 +506,7 @@ bool GlRenderDeviceUVE::ReadbackBufferUVE(BufferHandleUVE buffer, std::span<std:
     UVE_GL_CHECK_ERROR_UVE("ReadbackBufferUVE");
     m_impl->state.gl.glBindBuffer(it->second.target, static_cast<GLuint>(previousBufferBinding));
     return true;
+#endif
 }
 
 TextureHandleUVE GlRenderDeviceUVE::CreateTextureUVE(const TextureDescUVE& desc,
@@ -658,8 +704,15 @@ PipelineHandleUVE GlRenderDeviceUVE::CreatePipelineUVE(const PipelineDescUVE& de
 
     Detail::GlDeviceStateUVE::PipelineRecordUVE record{
         glProgram, glVao, desc.vertexLayout, desc.vertexStride, desc.depthTestEnabled, desc.depthWriteEnabled,
+#if !defined(__ANDROID__)
+        desc.blendMode, /*isCompute=*/false, {}, {}};
+#else
         desc.blendMode, /*isCompute=*/false, {}};
+#endif
     ReflectPipelineUniformsUVE(m_impl->state.gl, glProgram, record.uniforms);
+#if !defined(__ANDROID__)
+    ReflectStorageBindingSlotsUVE(m_impl->state.gl, glProgram, record.storageBindingSlots);
+#endif
 
     const std::uint32_t handleValue = m_impl->state.nextPipelineHandle++;
     m_impl->state.pipelines.emplace(handleValue, std::move(record));
@@ -718,10 +771,18 @@ PipelineHandleUVE GlRenderDeviceUVE::CreateComputePipelineUVE(const ComputePipel
     // GlCommandBufferUVE skips glBindVertexArray() for isCompute pipelines entirely.
     Detail::GlDeviceStateUVE::PipelineRecordUVE record{
         glProgram, /*glVao=*/0U, {}, /*vertexStride=*/0U, /*depthTestEnabled=*/true,
-        /*depthWriteEnabled=*/true, PipelineBlendModeUVE::Opaque, /*isCompute=*/true, {}};
+        /*depthWriteEnabled=*/true,
+#if !defined(__ANDROID__)
+        PipelineBlendModeUVE::Opaque, /*isCompute=*/true, {}, {}};
+#else
+        PipelineBlendModeUVE::Opaque, /*isCompute=*/true, {}};
+#endif
     // Active-uniform reflection works identically for compute programs, so SetUniform*UVE on a
     // compute pipeline needs no special-casing.
     ReflectPipelineUniformsUVE(m_impl->state.gl, glProgram, record.uniforms);
+#if !defined(__ANDROID__)
+    ReflectStorageBindingSlotsUVE(m_impl->state.gl, glProgram, record.storageBindingSlots);
+#endif
 
     const std::uint32_t handleValue = m_impl->state.nextPipelineHandle++;
     m_impl->state.pipelines.emplace(handleValue, std::move(record));
@@ -838,11 +899,18 @@ PipelineHandleUVE GlRenderDeviceUVE::CreatePipelineFromBinaryUVE(std::span<const
 
     Detail::GlDeviceStateUVE::PipelineRecordUVE record{
         glProgram, glVao, desc.vertexLayout, desc.vertexStride, desc.depthTestEnabled, desc.depthWriteEnabled,
+#if !defined(__ANDROID__)
+        desc.blendMode, /*isCompute=*/false, {}, {}};
+#else
         desc.blendMode, /*isCompute=*/false, {}};
+#endif
     // Uniform locations are not guaranteed portable across a binary load even though behavior
     // is - reflection must always be re-run here, never assumed inherited from the original
     // compile that produced this binary.
     ReflectPipelineUniformsUVE(m_impl->state.gl, glProgram, record.uniforms);
+#if !defined(__ANDROID__)
+    ReflectStorageBindingSlotsUVE(m_impl->state.gl, glProgram, record.storageBindingSlots);
+#endif
 
     const std::uint32_t handleValue = m_impl->state.nextPipelineHandle++;
     m_impl->state.pipelines.emplace(handleValue, std::move(record));
@@ -865,6 +933,36 @@ void GlRenderDeviceUVE::PresentUVE() {
     if (IsUsableUVE()) {
         m_impl->state.windowManager->SwapBuffersUVE();
     }
+}
+
+RenderDeviceCapabilitiesUVE GlRenderDeviceUVE::GetCapabilitiesUVE() const noexcept {
+    RenderDeviceCapabilitiesUVE capabilities{};
+    capabilities.backend = RenderBackendUVE::OpenGL;
+    capabilities.apiMajor = m_impl != nullptr && m_impl->state.contextMajorVersion > 0
+                                ? static_cast<std::uint32_t>(m_impl->state.contextMajorVersion)
+                                : 0U;
+    capabilities.apiMinor = m_impl != nullptr && m_impl->state.contextMinorVersion > 0
+                                ? static_cast<std::uint32_t>(m_impl->state.contextMinorVersion)
+                                : 0U;
+    capabilities.supportsGraphics = IsUsableUVE();
+    capabilities.supportsComputeShaders = m_impl != nullptr && m_impl->state.supportsComputeShadersUVE;
+    capabilities.supportsStorageBuffers = capabilities.supportsComputeShaders;
+    capabilities.supportsStorageImages = capabilities.supportsComputeShaders && m_impl->state.gl.glBindImageTexture != nullptr;
+    capabilities.supportsIndirectDraw = capabilities.supportsGraphics &&
+                                        m_impl->state.gl.glDrawElementsIndirect != nullptr;
+    capabilities.supportsMultiThreadedRecording = false; // OpenGL's context is thread-affine.
+    capabilities.supportsBindlessResources = false; // no ARB_bindless_texture contract yet.
+    capabilities.supportsDescriptorIndexing = false;
+    if (m_impl != nullptr) {
+        capabilities.maxSampledTextures = m_impl->state.maxCombinedTextureImageUnits > 0
+                                               ? static_cast<std::uint32_t>(m_impl->state.maxCombinedTextureImageUnits)
+                                               : 0U;
+        capabilities.maxStorageBuffers = m_impl->state.maxShaderStorageBindings > 0
+                                             ? static_cast<std::uint32_t>(m_impl->state.maxShaderStorageBindings)
+                                             : 0U;
+    }
+    capabilities.tier = ComputeRenderFeatureTierUVE(capabilities);
+    return capabilities;
 }
 
 std::string_view GlRenderDeviceUVE::GetBackendNameUVE() const noexcept {
