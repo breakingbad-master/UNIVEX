@@ -230,13 +230,19 @@ publicly shipping real-time engines as of today, without naming any of them.
   entry names — multi-threaded command recording (M4) and explicit memory/barrier management
   (the M2c staging discipline, M2e tracked-layout barriers, M3 device-local placement, M5b
   image barriers) — are now real and pixel-proven; the remaining known gaps are tracked as
-  their own entries below: the engine-level ComputeSystemUVE layer (Part 7.2) and shader
+  their own entries below: GPU-resident workload ownership and shader
   cross-compilation tooling
-- [ ] A backend for each target OS's native graphics API where OpenGL is not the best
-  choice on that platform
-- [ ] Shader cross-compilation so one shader source authors once and targets every backend
-  (currently shaders are authored directly in one shading language for one backend)
-- [ ] GPU compute-shader support (for culling, particle simulation, skinning, etc. on the
+- [~] A backend for each target OS's native graphics API where OpenGL is not the best
+  choice on that platform — the RHI now exposes an honest low-to-high capability profile
+  (`RenderDeviceCapabilitiesUVE`) so Windows/D3D12, macOS/iOS/Metal, Linux/Vulkan, and
+  Android/Vulkan backends can negotiate feature tiers without leaking native types. The
+  native D3D12 and Metal implementations, and the mobile surface adapters, remain open.
+- [~] Shader cross-compilation so one shader source authors once and targets every backend
+  — `Engine/Tools/compile_shaders.py` now provides a build-time GLSL → SPIR-V → generated
+  GLSL/HLSL/MSL pipeline for Vulkan, OpenGL/GLES, D3D12, macOS, and iOS, with source hashes,
+  compiler versions, target artifacts, and a manifest. CMake/release integration and migration
+  of every existing built-in shader remain open; runtime compilation is deliberately not used.
+- [~] GPU compute-shader support (for culling, particle simulation, skinning, etc. on the
   GPU instead of the CPU) — RHI level completed with M5a (compute pipelines, DispatchUVE,
   SSBO write path) and M5b (STORAGE_IMAGE descriptors, GENERAL transitions + image barriers,
   unified texture-slot space, pixel-proven on lavapipe and GL); the engine-level
@@ -299,7 +305,13 @@ publicly shipping real-time engines as of today, without naming any of them.
   GLSL has no portable float64 and a double CPU path would have left a permanent ~1 ULP
   disagreement on roughly one vertex in six, forcing every skinning test onto a tolerance.
   Pose resolution stays on the CPU: walking a parent chain is serial work a dispatch cannot help.
-- [ ] Bindless/descriptor-indexing-style resource binding for reduced per-draw overhead
+  Remaining for this program is GPU-resident particle emission/compaction and verification on
+  every new native backend.
+- [~] Bindless/descriptor-indexing-style resource binding for reduced per-draw overhead — the
+  backend-neutral `BindlessResourceTableUVE` now provides bounded per-kind descriptor arrays,
+  stable slots, generation-checked handles, deterministic exhaustion, and a shared fallback
+  contract for low-tier devices. Native descriptor heaps/indexing in Vulkan, D3D12, and Metal
+  plus shader-side resource-index bindings remain open.
 
 ---
 

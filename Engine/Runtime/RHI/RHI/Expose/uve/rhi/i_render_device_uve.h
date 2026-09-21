@@ -14,6 +14,7 @@
 #include "uve/rhi/buffer_handle_uve.h"
 #include "uve/rhi/i_command_buffer_uve.h"
 #include "uve/rhi/pipeline_handle_uve.h"
+#include "uve/rhi/render_device_capabilities_uve.h"
 #include "uve/rhi/render_resource_descs_uve.h"
 #include "uve/rhi/shader_handle_uve.h"
 #include "uve/rhi/texture_handle_uve.h"
@@ -164,6 +165,13 @@ public:
     /// GetPresentCallCountUVE()); a windowless backend that never renders to a window has nothing
     /// meaningful to do here either.
     virtual void PresentUVE() = 0;
+
+    /// Returns the negotiated feature snapshot for this device.  The default keeps source and
+    /// binary compatibility for small test doubles that implement the RHI but predate capability
+    /// reporting; real backends override it with their actual API/device limits.
+    [[nodiscard]] virtual RenderDeviceCapabilitiesUVE GetCapabilitiesUVE() const noexcept {
+        return {};
+    }
 
     /// True when the backend can safely accept resource/command calls. A device can become
     /// unusable after a native surface/context loss; callers must stop issuing work when this

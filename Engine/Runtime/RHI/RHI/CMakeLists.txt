@@ -15,6 +15,7 @@
 # top of RHI, and stays future work.
 
 add_library(uve_rhi STATIC
+    Internal/bindless_resource_table_uve.cpp
     Internal/shader_data_type_uve.cpp
 )
 target_include_directories(uve_rhi PUBLIC Expose)

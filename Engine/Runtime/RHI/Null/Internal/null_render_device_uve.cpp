@@ -261,6 +261,13 @@ void NullRenderDeviceUVE::PresentUVE() {
     ++m_impl->presentCallCount;
 }
 
+RenderDeviceCapabilitiesUVE NullRenderDeviceUVE::GetCapabilitiesUVE() const noexcept {
+    RenderDeviceCapabilitiesUVE capabilities{};
+    capabilities.backend = RenderBackendUVE::Null;
+    capabilities.tier = RenderFeatureTierUVE::Low;
+    return capabilities;
+}
+
 bool NullRenderDeviceUVE::IsUsableUVE() const noexcept {
     return true;
 }

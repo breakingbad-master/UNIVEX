@@ -63,6 +63,7 @@ public:
     void SubmitUVE(std::unique_ptr<ICommandBufferUVE> commandBuffer) override;
     void PresentUVE() override;
 
+    [[nodiscard]] RenderDeviceCapabilitiesUVE GetCapabilitiesUVE() const noexcept override;
     [[nodiscard]] bool IsUsableUVE() const noexcept override;
     [[nodiscard]] std::string_view GetBackendNameUVE() const noexcept override;
 

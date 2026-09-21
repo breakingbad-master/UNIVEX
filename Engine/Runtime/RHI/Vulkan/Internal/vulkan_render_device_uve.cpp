@@ -168,6 +168,7 @@ struct VulkanRenderDeviceUVE::ImplUVE {
     // through-dynamic-rendering decisions branch on useDynamicRendering, never on the probe.
     bool dynamicRenderingSupported = false;
     bool useDynamicRendering = false;
+    std::uint32_t apiVersion = VK_API_VERSION_1_0;
 
     // M2d scratch depth for color-only offscreen passes: one DEVICE_LOCAL depth image per
     // encountered extent (same 1-frame-in-flight argument that licenses the single swapchain
@@ -1089,7 +1090,7 @@ bool VulkanRenderDeviceUVE::ImplUVE::InitializeUVE() {
 
     // API version: prefer the loader-reported ceiling, but only the MAJOR.MINOR the M1 code
     // was written against — newer minors remain valid to request at 1.x (loader validates).
-    std::uint32_t apiVersion = VK_API_VERSION_1_0;
+    apiVersion = VK_API_VERSION_1_0;
     if (vk.vkEnumerateInstanceVersion != nullptr &&
         vk.vkEnumerateInstanceVersion(&apiVersion) != VK_SUCCESS) {
         apiVersion = VK_API_VERSION_1_0; // query present but failed: pin to the guaranteed floor
@@ -4700,6 +4701,31 @@ void VulkanRenderDeviceUVE::PresentUVE() {
         UVE_WARNING("VulkanRenderDeviceUVE::PresentUVE: vkQueuePresentKHR failed (result {})",
                     static_cast<int>(presentResult));
     }
+}
+
+RenderDeviceCapabilitiesUVE VulkanRenderDeviceUVE::GetCapabilitiesUVE() const noexcept {
+    RenderDeviceCapabilitiesUVE capabilities{};
+    capabilities.backend = RenderBackendUVE::Vulkan;
+    capabilities.apiMajor = VK_API_VERSION_MAJOR(m_impl->apiVersion);
+    capabilities.apiMinor = VK_API_VERSION_MINOR(m_impl->apiVersion);
+    capabilities.supportsGraphics = m_impl->usable;
+    // The classic render-pass arm cannot legally close a pass around compute dispatch.  Report
+    // compute only when the actual dynamic-rendering path that makes the documented dispatch
+    // contract possible is enabled, rather than advertising a pipeline-creation capability
+    // that cannot execute on that device.
+    capabilities.supportsComputeShaders = m_impl->usable && m_impl->useDynamicRendering;
+    capabilities.supportsStorageBuffers = m_impl->usable;
+    capabilities.supportsStorageImages = m_impl->usable && m_impl->useDynamicRendering;
+    capabilities.supportsIndirectDraw = m_impl->usable && m_impl->vk.vkCmdDrawIndexedIndirect != nullptr;
+    capabilities.supportsDynamicRendering = m_impl->useDynamicRendering;
+    capabilities.supportsMultiThreadedRecording = m_impl->usable;
+    // Bindless is intentionally false until the descriptor-indexing table and its bounded
+    // fallback are both implemented.  Calling code must continue to use the existing tuple
+    // descriptor cache on this slice; a capability bit must never get ahead of behavior.
+    capabilities.supportsBindlessResources = false;
+    capabilities.supportsDescriptorIndexing = false;
+    capabilities.tier = ComputeRenderFeatureTierUVE(capabilities);
+    return capabilities;
 }
 
 bool VulkanRenderDeviceUVE::IsUsableUVE() const noexcept {

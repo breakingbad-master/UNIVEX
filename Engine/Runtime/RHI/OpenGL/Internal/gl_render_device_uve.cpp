@@ -286,12 +286,11 @@ GlRenderDeviceUVE::GlRenderDeviceUVE(Window::IWindowManagerUVE& windowManager)
 #if !defined(__ANDROID__)
         // GL_MAJOR_VERSION/GL_MINOR_VERSION are valid integer queries from GL 3.0 onward, which
         // this engine's desktop baseline already requires - safe to call unconditionally here.
-        GLint contextMajorVersion = 0;
-        GLint contextMinorVersion = 0;
-        glGetIntegerv(GL_MAJOR_VERSION, &contextMajorVersion);
-        glGetIntegerv(GL_MINOR_VERSION, &contextMinorVersion);
+        glGetIntegerv(GL_MAJOR_VERSION, &m_impl->state.contextMajorVersion);
+        glGetIntegerv(GL_MINOR_VERSION, &m_impl->state.contextMinorVersion);
         m_impl->state.supportsComputeShadersUVE =
-            contextMajorVersion > 4 || (contextMajorVersion == 4 && contextMinorVersion >= 3);
+            m_impl->state.contextMajorVersion > 4 ||
+            (m_impl->state.contextMajorVersion == 4 && m_impl->state.contextMinorVersion >= 3);
         if (m_impl->state.supportsComputeShadersUVE) {
             // M2f: SSBO binding points share compute's GL 4.3 floor; queried once here so
             // BindStorageBufferUVE validates slots against the real driver limit.
@@ -865,6 +864,36 @@ void GlRenderDeviceUVE::PresentUVE() {
     if (IsUsableUVE()) {
         m_impl->state.windowManager->SwapBuffersUVE();
     }
+}
+
+RenderDeviceCapabilitiesUVE GlRenderDeviceUVE::GetCapabilitiesUVE() const noexcept {
+    RenderDeviceCapabilitiesUVE capabilities{};
+    capabilities.backend = RenderBackendUVE::OpenGL;
+    capabilities.apiMajor = m_impl != nullptr && m_impl->state.contextMajorVersion > 0
+                                ? static_cast<std::uint32_t>(m_impl->state.contextMajorVersion)
+                                : 0U;
+    capabilities.apiMinor = m_impl != nullptr && m_impl->state.contextMinorVersion > 0
+                                ? static_cast<std::uint32_t>(m_impl->state.contextMinorVersion)
+                                : 0U;
+    capabilities.supportsGraphics = IsUsableUVE();
+    capabilities.supportsComputeShaders = m_impl != nullptr && m_impl->state.supportsComputeShadersUVE;
+    capabilities.supportsStorageBuffers = capabilities.supportsComputeShaders;
+    capabilities.supportsStorageImages = capabilities.supportsComputeShaders && m_impl->state.gl.glBindImageTexture != nullptr;
+    capabilities.supportsIndirectDraw = capabilities.supportsGraphics &&
+                                        m_impl->state.gl.glDrawElementsIndirect != nullptr;
+    capabilities.supportsMultiThreadedRecording = false; // OpenGL's context is thread-affine.
+    capabilities.supportsBindlessResources = false; // no ARB_bindless_texture contract yet.
+    capabilities.supportsDescriptorIndexing = false;
+    if (m_impl != nullptr) {
+        capabilities.maxSampledTextures = m_impl->state.maxCombinedTextureImageUnits > 0
+                                               ? static_cast<std::uint32_t>(m_impl->state.maxCombinedTextureImageUnits)
+                                               : 0U;
+        capabilities.maxStorageBuffers = m_impl->state.maxShaderStorageBindings > 0
+                                             ? static_cast<std::uint32_t>(m_impl->state.maxShaderStorageBindings)
+                                             : 0U;
+    }
+    capabilities.tier = ComputeRenderFeatureTierUVE(capabilities);
+    return capabilities;
 }
 
 std::string_view GlRenderDeviceUVE::GetBackendNameUVE() const noexcept {

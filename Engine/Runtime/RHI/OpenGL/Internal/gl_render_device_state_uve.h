@@ -47,6 +47,8 @@ struct GlDeviceStateUVE {
     GLint maxCombinedTextureImageUnits = 0;
     GLint maxUniformBufferBindings = 0;
     GLint maxVertexAttribs = 0;
+    GLint contextMajorVersion = 0;
+    GLint contextMinorVersion = 0;
 
     /// GL_SHADER_STORAGE_BUFFER_BINDINGS, queried only when supportsComputeShadersUVE (SSBOs
     /// share compute's GL 4.3 core floor; M2f binds them from GRAPHICS-stage shaders). Stays 0

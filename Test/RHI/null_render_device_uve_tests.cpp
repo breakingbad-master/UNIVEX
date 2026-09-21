@@ -2,6 +2,7 @@
 
 
 #include "uve/rhi_null/null_render_device_uve.h"
+#include "uve/rhi/bindless_resource_table_uve.h"
 
 #include <algorithm>
 #include <array>
@@ -859,6 +860,60 @@ TEST(NullCommandBufferUVERuntimeTest, CommandBufferLifecycleMisuseIsSafeNoOpInRe
     EXPECT_TRUE(std::holds_alternative<DispatchCommandUVE>(recorded[10]));
 }
 #endif
+
+TEST(NullRenderDeviceUVETest, GetCapabilitiesUVE_ReportsLowNonGpuProfile) {
+    NullRenderDeviceUVE device;
+
+    const RenderDeviceCapabilitiesUVE capabilities = device.GetCapabilitiesUVE();
+
+    EXPECT_EQ(capabilities.backend, RenderBackendUVE::Null);
+    EXPECT_EQ(capabilities.tier, RenderFeatureTierUVE::Low);
+    EXPECT_FALSE(capabilities.supportsGraphics);
+    EXPECT_FALSE(capabilities.supportsComputeShaders);
+    EXPECT_FALSE(capabilities.supportsBindlessResources);
+    EXPECT_FALSE(capabilities.supportsDescriptorIndexing);
+    EXPECT_EQ(capabilities.tier, ComputeRenderFeatureTierUVE(capabilities));
+    EXPECT_FALSE(IsRenderFeatureTierAtLeastUVE(capabilities.tier, RenderFeatureTierUVE::Baseline));
+}
+
+TEST(BindlessResourceTableUVETest, GenerationRejectsStaleHandleAndReusesSlotSafely) {
+    BindlessResourceTableUVE table(BindlessResourceTableDescUVE{1U, 1U, 1U});
+
+    const BindlessResourceHandleUVE first = table.RegisterSampledTextureUVE(TextureHandleUVE{7U});
+    ASSERT_NE(first.slot, kInvalidBindlessResourceSlotUVE);
+    EXPECT_EQ(table.ResolveSlotUVE(BindlessResourceKindUVE::SampledTexture, first), 0U);
+    ASSERT_TRUE(table.ResolveSampledTextureUVE(first).has_value());
+    EXPECT_EQ(table.ResolveSampledTextureUVE(first)->value, 7U);
+    EXPECT_EQ(table.RegisterSampledTextureUVE(TextureHandleUVE{8U}).slot,
+              kInvalidBindlessResourceSlotUVE);
+
+    ASSERT_TRUE(table.ReleaseUVE(BindlessResourceKindUVE::SampledTexture, first));
+    EXPECT_EQ(table.ResolveSlotUVE(BindlessResourceKindUVE::SampledTexture, first),
+              kInvalidBindlessResourceSlotUVE);
+    EXPECT_FALSE(table.UpdateSampledTextureUVE(first, TextureHandleUVE{9U}));
+
+    const BindlessResourceHandleUVE second = table.RegisterSampledTextureUVE(TextureHandleUVE{8U});
+    ASSERT_NE(second.slot, kInvalidBindlessResourceSlotUVE);
+    EXPECT_EQ(second.slot, first.slot);
+    EXPECT_NE(second.generation, first.generation);
+    ASSERT_TRUE(table.ResolveSampledTextureUVE(second).has_value());
+    EXPECT_EQ(table.ResolveSampledTextureUVE(second)->value, 8U);
+}
+
+TEST(BindlessResourceTableUVETest, InvalidResourcesAndKindMismatchesDoNotAllocate) {
+    BindlessResourceTableUVE table(BindlessResourceTableDescUVE{2U, 2U, 2U});
+
+    EXPECT_EQ(table.RegisterSampledTextureUVE(kInvalidTextureHandleUVE).slot,
+              kInvalidBindlessResourceSlotUVE);
+    EXPECT_EQ(table.RegisterStorageBufferUVE(kInvalidBufferHandleUVE).slot,
+              kInvalidBindlessResourceSlotUVE);
+    const BindlessResourceHandleUVE texture = table.RegisterSampledTextureUVE(TextureHandleUVE{3U});
+    ASSERT_NE(texture.slot, kInvalidBindlessResourceSlotUVE);
+    EXPECT_FALSE(table.ReleaseUVE(BindlessResourceKindUVE::StorageTexture, texture));
+    EXPECT_EQ(table.GetLiveCountUVE(BindlessResourceKindUVE::SampledTexture), 1U);
+    EXPECT_EQ(table.GetLiveCountUVE(BindlessResourceKindUVE::StorageTexture), 0U);
+    EXPECT_EQ(table.GetLiveCountUVE(BindlessResourceKindUVE::StorageBuffer), 0U);
+}
 
 } // namespace
 } // namespace UVE::Render::Tests

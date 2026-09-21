@@ -26,6 +26,7 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/Engine/CMake")
 include(UveCompilerWarnings)
 include(UveBuildConfiguration)
 include(UveFormatSupport)
+include(UveShaderPipeline)
 
 include(FetchContent)
 set(JSON_BuildTests OFF CACHE INTERNAL "")

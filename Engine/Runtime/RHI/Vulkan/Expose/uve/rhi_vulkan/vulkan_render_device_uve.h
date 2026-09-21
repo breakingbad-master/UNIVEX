@@ -256,6 +256,7 @@ public:
     /// no-op, never an error, mirroring the GL device's minimization contract.
     void PresentUVE() override;
 
+    [[nodiscard]] RenderDeviceCapabilitiesUVE GetCapabilitiesUVE() const noexcept override;
     [[nodiscard]] bool IsUsableUVE() const noexcept override;
     [[nodiscard]] std::string_view GetBackendNameUVE() const noexcept override;
 
