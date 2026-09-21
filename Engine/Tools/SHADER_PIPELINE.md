@@ -110,7 +110,7 @@ target. ShaderManagerUVE now consumes the cooked artifact when the backend-speci
 cooked variant. The repository CI runs `spirv-val` against Vulkan-semantics modules and validates
 OpenGL-semantics intermediates with the generic SPIR-V validator, plus SPIRV-Cross JSON reflection
 on `bindless_probe.vulkan.spv`. The target covers the four compute built-ins, the deterministic B1
-fixture, and the first `basic_2d`/`basic_3d` graphics pair. Remaining work is migration of the
-other graphics shaders, target-native final compiler validation on Windows/D3D12 and
+fixture, and the first `basic_2d`/`basic_3d`/`particle` graphics materials. Remaining work is
+migration of the other graphics shaders, target-native final compiler validation on Windows/D3D12 and
 macOS/iOS/Metal, and hardware coverage. The tool itself is already usable as a reproducible,
 target-aware artifact generator.

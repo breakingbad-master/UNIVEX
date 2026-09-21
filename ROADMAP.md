@@ -244,7 +244,7 @@ publicly shipping real-time engines as of today, without naming any of them.
   `uve_builtin_shader_artifacts` target through `UVE_BUILD_BUILTIN_SHADER_ARTIFACTS=ON`; it
   covers the four compute built-ins used by the current GPU workload proofs, the B1
   `bindless_probe.glsl` descriptor-set fixture, and stage-specific `basic_2d.glsl`/
-  `basic_3d.glsl` graphics artifacts. Those first graphics shaders use one authoring source with
+  `basic_3d.glsl`/`particle.glsl` graphics artifacts. Those first graphics shaders use one authoring source with
   OpenGL default-block uniforms and Vulkan push constants selected by target policy; embedded
   fallback strings remain byte-identical to the authoring files. ShaderManagerUVE now mounts an
   optional cooked tree and selects the backend artifact (`.spv` for Vulkan, generated GLSL for

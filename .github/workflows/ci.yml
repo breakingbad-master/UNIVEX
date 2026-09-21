@@ -84,7 +84,7 @@ jobs:
           import json
           from pathlib import Path
 
-          for stem in ("basic_2d", "basic_3d"):
+          for stem in ("basic_2d", "basic_3d", "particle"):
               for stage in ("vert", "frag"):
                   root = Path("build/shaders") / stem / stage
                   manifest = json.loads((root / "shader_manifest.json").read_text(encoding="utf-8"))
