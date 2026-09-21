@@ -57,12 +57,23 @@ if(UVE_BUILD_BUILTIN_SHADER_ARTIFACTS)
         list(APPEND _uve_builtin_shader_artifact_targets "uve_shader_artifact_${_uve_shader}")
     endforeach()
 
-    # Graphics shader migration starts with the two basic materials and the particle material.
-    # The canonical sources remain OpenGL-compatible for the runtime fallback, while the offline
-    # Vulkan compile selects each shader's explicit push-constant layout. SPIRV-Cross then emits
-    # the corresponding native form for every requested backend; each stage gets its own directory
-    # so a generated artifact can never be mistaken for the other entry point.
-    foreach(_uve_shader IN ITEMS basic_2d basic_3d particle)
+    # Graphics shader migration covers the basic materials, particle material, and the first
+    # post-processing/UI materials. The canonical sources remain OpenGL-compatible for the runtime
+    # fallback, while the offline Vulkan compile selects each shader's explicit push-constant and
+    # descriptor layout. SPIRV-Cross then emits the corresponding native form for every requested
+    # backend; each stage gets its own directory so a generated artifact can never be mistaken for
+    # the other entry point.
+    foreach(_uve_shader IN ITEMS
+        basic_2d
+        basic_3d
+        basic_3d_textured
+        particle
+        fullscreen_quad
+        fullscreen_copy
+        bloom_bright_pass
+        bloom_blur
+        ssao
+        ui_overlay)
         uve_add_shader_artifacts(
             "uve_shader_artifact_${_uve_shader}_vert"
             SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/Engine/Runtime/RHI/Shader/built_in/${_uve_shader}.glsl"

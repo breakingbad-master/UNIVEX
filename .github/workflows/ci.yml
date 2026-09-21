@@ -84,7 +84,10 @@ jobs:
           import json
           from pathlib import Path
 
-          for stem in ("basic_2d", "basic_3d", "particle"):
+          for stem in (
+              "basic_2d", "basic_3d", "basic_3d_textured", "particle", "fullscreen_quad", "fullscreen_copy",
+              "bloom_bright_pass", "bloom_blur", "ssao", "ui_overlay"
+          ):
               for stage in ("vert", "frag"):
                   root = Path("build/shaders") / stem / stage
                   manifest = json.loads((root / "shader_manifest.json").read_text(encoding="utf-8"))
@@ -94,7 +97,7 @@ jobs:
                   for target, artifact_path in artifact["artifacts"].items():
                       if not Path(artifact_path).is_file() or Path(artifact_path).stat().st_size == 0:
                           raise SystemExit(f"{stem}/{stage}: missing/empty {target} artifact")
-          print("Validated cooked basic_2d/basic_3d stage artifacts and target policy manifests")
+          print("Validated cooked graphics stage artifacts and target policy manifests")
           PY
           spirv-cross build/shaders/bindless_probe/bindless_probe.vulkan.spv --reflect \
             > build/shaders/bindless_probe/bindless_probe.reflection.json

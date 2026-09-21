@@ -92,14 +92,23 @@ void main() {
 
 const std::string_view kBasic3DTexturedSource = R"GLSLSRC(#version 450 core
 
+#ifdef UVE_VULKAN
+layout(push_constant) uniform UveBasic3DTexturedParameters {
+    mat4 uModel;
+    mat4 uViewProjection;
+} uveParameters;
+#define uModel uveParameters.uModel
+#define uViewProjection uveParameters.uViewProjection
+#else
+uniform mat4 uModel;
+uniform mat4 uViewProjection;
+#endif
+
 #ifdef VERTEX_SHADER
 layout(location = 0) in vec3 aPosition;
 layout(location = 1) in vec2 aTexCoord;
 
-out vec2 vTexCoord;
-
-uniform mat4 uModel;
-uniform mat4 uViewProjection;
+layout(location = 0) out vec2 vTexCoord;
 
 void main() {
     vTexCoord = aTexCoord;
@@ -108,12 +117,16 @@ void main() {
 #endif
 
 #ifdef FRAGMENT_SHADER
-in vec2 vTexCoord;
-out vec4 FragColor;
+layout(location = 0) in vec2 vTexCoord;
+layout(location = 0) out vec4 FragColor;
 
 // Placeholder only - no CreateTextureUVE-backed binding exists yet this increment
 // (MaterialSystemUVE, a future increment, is what actually binds a real texture here).
+#ifdef UVE_VULKAN
+layout(set = 0, binding = 0) uniform sampler2D uTexture;
+#else
 uniform sampler2D uTexture;
+#endif
 
 void main() {
     FragColor = texture(uTexture, vTexCoord);
@@ -125,7 +138,7 @@ const std::string_view kFullscreenQuadSource = R"GLSLSRC(#version 450 core
 
 #ifdef VERTEX_SHADER
 // Fullscreen triangle via the vertex-ID trick: no vertex buffer is required.
-out vec2 vTexCoord;
+layout(location = 0) out vec2 vTexCoord;
 
 void main() {
     vec2 position = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
@@ -135,10 +148,14 @@ void main() {
 #endif
 
 #ifdef FRAGMENT_SHADER
-in vec2 vTexCoord;
-out vec4 FragColor;
+layout(location = 0) in vec2 vTexCoord;
+layout(location = 0) out vec4 FragColor;
 
+#ifdef UVE_VULKAN
+layout(set = 0, binding = 0) uniform sampler2D uSourceTexture;
+#else
 uniform sampler2D uSourceTexture;
+#endif
 
 vec3 AcesToneMapUVE(vec3 color) {
     const float a = 2.51;
@@ -1071,9 +1088,18 @@ void main() {
 
 const std::string_view kBloomBrightPassSource = R"GLSLSRC(#version 450 core
 
+#ifdef UVE_VULKAN
+layout(push_constant) uniform UveBloomBrightParameters {
+    float uBloomThreshold;
+} uveParameters;
+#define uBloomThreshold uveParameters.uBloomThreshold
+#else
+uniform float uBloomThreshold;
+#endif
+
 #ifdef VERTEX_SHADER
 // Fullscreen triangle via the vertex-ID trick: no vertex buffer is required.
-out vec2 vTexCoord;
+layout(location = 0) out vec2 vTexCoord;
 
 void main() {
     vec2 position = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
@@ -1083,11 +1109,14 @@ void main() {
 #endif
 
 #ifdef FRAGMENT_SHADER
-in vec2 vTexCoord;
-out vec4 FragColor;
+layout(location = 0) in vec2 vTexCoord;
+layout(location = 0) out vec4 FragColor;
 
+#ifdef UVE_VULKAN
+layout(set = 0, binding = 0) uniform sampler2D uSourceTexture;
+#else
 uniform sampler2D uSourceTexture;
-uniform float uBloomThreshold;
+#endif
 
 void main() {
     vec3 hdrColor = max(texture(uSourceTexture, vTexCoord).rgb, vec3(0.0));
@@ -1100,9 +1129,27 @@ void main() {
 
 const std::string_view kBloomBlurSource = R"GLSLSRC(#version 450 core
 
+#ifdef UVE_VULKAN
+layout(push_constant) uniform UveBloomBlurParameters {
+    float uBlurDirectionX;
+    float uBlurDirectionY;
+    float uTexelSizeX;
+    float uTexelSizeY;
+} uveParameters;
+#define uBlurDirectionX uveParameters.uBlurDirectionX
+#define uBlurDirectionY uveParameters.uBlurDirectionY
+#define uTexelSizeX uveParameters.uTexelSizeX
+#define uTexelSizeY uveParameters.uTexelSizeY
+#else
+uniform float uBlurDirectionX;
+uniform float uBlurDirectionY;
+uniform float uTexelSizeX;
+uniform float uTexelSizeY;
+#endif
+
 #ifdef VERTEX_SHADER
 // Fullscreen triangle via the vertex-ID trick: no vertex buffer is required.
-out vec2 vTexCoord;
+layout(location = 0) out vec2 vTexCoord;
 
 void main() {
     vec2 position = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
@@ -1112,19 +1159,19 @@ void main() {
 #endif
 
 #ifdef FRAGMENT_SHADER
-in vec2 vTexCoord;
-out vec4 FragColor;
+layout(location = 0) in vec2 vTexCoord;
+layout(location = 0) out vec4 FragColor;
 
+#ifdef UVE_VULKAN
+layout(set = 0, binding = 0) uniform sampler2D uSourceTexture;
+#else
 uniform sampler2D uSourceTexture;
+#endif
 // (1,0) for a horizontal pass, (0,1) for a vertical pass - the same shader serves both halves of
 // the separable Gaussian blur, one draw each, ping-ponging between two same-sized targets.
 // Individual floats, not a vec2: ShaderProgramUVE currently only exposes Float/Int/Bool/Vec3/Mat4
 // uniform setters (see shader_program_uve.h), so this avoids adding a new uniform-value type for
 // a single consumer.
-uniform float uBlurDirectionX;
-uniform float uBlurDirectionY;
-uniform float uTexelSizeX;
-uniform float uTexelSizeY;
 
 void main() {
     // 9-tap Gaussian, weights normalized to sum to 1 (sigma ~= 2 texels).
@@ -1146,7 +1193,7 @@ const std::string_view kFullscreenCopySource = R"GLSLSRC(#version 450 core
 
 #ifdef VERTEX_SHADER
 // Fullscreen triangle via the vertex-ID trick: no vertex buffer is required.
-out vec2 vTexCoord;
+layout(location = 0) out vec2 vTexCoord;
 
 void main() {
     vec2 position = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
@@ -1156,13 +1203,17 @@ void main() {
 #endif
 
 #ifdef FRAGMENT_SHADER
-in vec2 vTexCoord;
-out vec4 FragColor;
+layout(location = 0) in vec2 vTexCoord;
+layout(location = 0) out vec4 FragColor;
 
 // Unmodified passthrough: the actual effect is the pipeline's blend mode this shader is used
 // with, not anything computed here - Additive to composite the blurred bloom texture onto the
 // HDR scene color, Multiply to composite the SSAO occlusion term onto it.
+#ifdef UVE_VULKAN
+layout(set = 0, binding = 0) uniform sampler2D uSourceTexture;
+#else
 uniform sampler2D uSourceTexture;
+#endif
 
 void main() {
     FragColor = texture(uSourceTexture, vTexCoord);
@@ -1172,9 +1223,30 @@ void main() {
 
 const std::string_view kSsaoSource = R"GLSLSRC(#version 450 core
 
+#ifdef UVE_VULKAN
+layout(push_constant) uniform UveSsaoParameters {
+    mat4 uInverseProjection;
+    mat4 uProjection;
+    float uRadius;
+    float uBias;
+    float uIntensity;
+} uveParameters;
+#define uInverseProjection uveParameters.uInverseProjection
+#define uProjection uveParameters.uProjection
+#define uRadius uveParameters.uRadius
+#define uBias uveParameters.uBias
+#define uIntensity uveParameters.uIntensity
+#else
+uniform mat4 uInverseProjection;
+uniform mat4 uProjection;
+uniform float uRadius;
+uniform float uBias;
+uniform float uIntensity;
+#endif
+
 #ifdef VERTEX_SHADER
 // Fullscreen triangle via the vertex-ID trick: no vertex buffer is required.
-out vec2 vTexCoord;
+layout(location = 0) out vec2 vTexCoord;
 
 void main() {
     vec2 position = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
@@ -1184,20 +1256,19 @@ void main() {
 #endif
 
 #ifdef FRAGMENT_SHADER
-in vec2 vTexCoord;
-out vec4 FragColor;
+layout(location = 0) in vec2 vTexCoord;
+layout(location = 0) out vec4 FragColor;
 
+#ifdef UVE_VULKAN
+layout(set = 0, binding = 0) uniform sampler2D uDepthTexture;
+#else
 uniform sampler2D uDepthTexture;
+#endif
 // The projection matrix and its inverse (Math::TryInverseUVE(), Phase 2d), NOT the combined
 // view-projection or its inverse - reconstruction below stays entirely in view space, so only the
 // projection step needs undoing (uInverseProjection) and redoing (uProjection, to re-project each
 // hemisphere sample and look up its screen position - computed once on the CPU per frame rather
 // than inverting uInverseProjection again per pixel).
-uniform mat4 uInverseProjection;
-uniform mat4 uProjection;
-uniform float uRadius;
-uniform float uBias;
-uniform float uIntensity;
 
 // A fixed 12-tap hemisphere kernel (offline-generated, hemisphere-distributed, biased toward the
 // origin so more samples land close to the shaded point) stands in for the noise-texture-driven
@@ -1289,15 +1360,23 @@ void main() {
 
 const std::string_view kUIOverlaySource = R"GLSLSRC(#version 450 core
 
+#ifdef UVE_VULKAN
+layout(push_constant) uniform UveUiOverlayParameters {
+    mat4 uProjection;
+} uveParameters;
+#define uProjection uveParameters.uProjection
+#else
+uniform mat4 uProjection;
+#endif
+
 #ifdef VERTEX_SHADER
 layout(location = 0) in vec2 aPosition;
 layout(location = 1) in vec2 aTexCoord;
 layout(location = 2) in vec4 aColor;
 
-out vec2 vTexCoord;
-out vec4 vColor;
+layout(location = 0) out vec2 vTexCoord;
+layout(location = 1) out vec4 vColor;
 
-uniform mat4 uProjection;
 
 void main() {
     vTexCoord = aTexCoord;
@@ -1307,12 +1386,16 @@ void main() {
 #endif
 
 #ifdef FRAGMENT_SHADER
-in vec2 vTexCoord;
-in vec4 vColor;
+layout(location = 0) in vec2 vTexCoord;
+layout(location = 1) in vec4 vColor;
 
-out vec4 FragColor;
+layout(location = 0) out vec4 FragColor;
 
+#ifdef UVE_VULKAN
+layout(set = 0, binding = 0) uniform sampler2D uSourceTexture;
+#else
 uniform sampler2D uSourceTexture;
+#endif
 
 void main() {
     FragColor = texture(uSourceTexture, vTexCoord) * vColor;
