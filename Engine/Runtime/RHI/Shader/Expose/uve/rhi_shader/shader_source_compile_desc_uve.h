@@ -23,7 +23,8 @@ struct ShaderSourceCompileDescUVE {
     std::string embeddedFallbackSourceCode;
 
     /// Extra `#define NAME VALUE` pairs injected after the engine's own baseline block
-    /// (UVE_DEBUG/UVE_MOBILE/UVE_BACKEND_GL) — see Detail::ApplyPreprocessorUVE()'s doc comment.
+    /// (UVE_DEBUG/UVE_MOBILE/UVE_BACKEND_GL and UVE_VULKAN for Vulkan source fallback) — see
+    /// Detail::ApplyPreprocessorUVE()'s doc comment.
     std::vector<std::pair<std::string, std::string>> extraDefines;
 
     std::string entryPointName = "main";

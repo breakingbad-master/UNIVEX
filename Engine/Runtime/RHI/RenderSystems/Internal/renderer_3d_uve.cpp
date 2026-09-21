@@ -13,6 +13,7 @@
 #include <utility>
 #include <span>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -1459,8 +1460,15 @@ struct Renderer3DUVE::ImplUVE {
             program.SetFloatUVE(names.range, light.range);
             program.SetFloatUVE(names.spotAngleDegrees, light.spotAngleDegrees);
         }
+        const bool usesExplicitVulkanDescriptors = renderDevice.GetBackendNameUVE().starts_with("Vulkan");
         program.SetMatrix4x4UVE(uniformNames.legacyLightSpaceMatrix, frameUniforms.lightSpaceMatrices[0]);
-        program.SetIntUVE("uShadowMapTexture", static_cast<std::int32_t>(kShadowMapTextureSlotUVE));
+        if (!usesExplicitVulkanDescriptors) {
+            // OpenGL keeps the legacy default-block sampler and sampler-array contract. Vulkan
+            // binds these resources by reflected descriptor binding (material 4-6, cascades
+            // 7-9), so sending GL texture-unit integers would only create misleading uniform
+            // name-miss diagnostics for the deliberately separate Vulkan sampler declarations.
+            program.SetIntUVE("uShadowMapTexture", static_cast<std::int32_t>(kShadowMapTextureSlotUVE));
+        }
         program.SetIntUVE("uShadowCascadeCount", frameUniforms.cascadeCount);
         program.SetFloatUVE("uShadowCascadeBlendRatio", frameUniforms.cascadeBlendRatio);
         for (std::size_t cascadeIndex = 0; cascadeIndex < kShadowCascadeCountUVE; ++cascadeIndex) {
@@ -1470,17 +1478,21 @@ struct Renderer3DUVE::ImplUVE {
                                     frameUniforms.lightSpaceMatrices[cascadeIndex]);
             program.SetFloatUVE(uniformNames.shadowCascadeSplits[cascadeIndex],
                                 frameUniforms.cascadeSplits[cascadeIndex]);
-            program.SetIntUVE(uniformNames.shadowMapTextures[cascadeIndex],
-                              static_cast<std::int32_t>(textureSlot));
+            if (!usesExplicitVulkanDescriptors) {
+                program.SetIntUVE(uniformNames.shadowMapTextures[cascadeIndex],
+                                  static_cast<std::int32_t>(textureSlot));
+            }
         }
         program.SetIntUVE("uShadowPcfKernelRadius", shadowPcfKernelRadius);
         program.SetVector3UVE("uAlbedoColor", material.albedoColor);
         program.SetFloatUVE("uMetallic", material.metallic);
         program.SetFloatUVE("uRoughness", material.roughness);
         program.SetVector3UVE("uEmissiveColor", material.emissiveColor);
-        program.SetIntUVE("uAlbedoTexture", static_cast<std::int32_t>(kAlbedoTextureSlotUVE));
-        program.SetIntUVE("uNormalTexture", static_cast<std::int32_t>(kNormalTextureSlotUVE));
-        program.SetIntUVE("uAOTexture", static_cast<std::int32_t>(kAoTextureSlotUVE));
+        if (!usesExplicitVulkanDescriptors) {
+            program.SetIntUVE("uAlbedoTexture", static_cast<std::int32_t>(kAlbedoTextureSlotUVE));
+            program.SetIntUVE("uNormalTexture", static_cast<std::int32_t>(kNormalTextureSlotUVE));
+            program.SetIntUVE("uAOTexture", static_cast<std::int32_t>(kAoTextureSlotUVE));
+        }
     }
 
     /// Binds the shadow cascades and the material's three textures - also shared by both paths.
