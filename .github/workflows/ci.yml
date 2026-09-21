@@ -43,7 +43,9 @@ jobs:
             mesa-vulkan-drivers \
             glslang-tools \
             spirv-tools \
-            spirv-cross
+            spirv-cross \
+            vulkan-tools \
+            vulkan-validationlayers
 
       - name: Report shader toolchain
         run: |
@@ -128,6 +130,18 @@ jobs:
               echo "::error title=CTest failed test::$encoded_test"
             done < "$failed_tests"
           fi
+
+      - name: Run Vulkan tests under the Khronos validation layer
+        # The normal ctest pass proves behavior; this second pass loads the validation layer
+        # through the loader environment without baking a validation dependency into shipping
+        # engine code. vulkaninfo proves the layer manifest is discoverable, and the focused
+        # device suite exercises the actual UniVex instance/device/swapchain path under it.
+        working-directory: build
+        env:
+          VK_INSTANCE_LAYERS: VK_LAYER_KHRONOS_validation
+        run: |
+          vulkaninfo --summary
+          xvfb-run -a ./Test/uve_core_tests --gtest_filter='VulkanRenderDeviceUVETest.*'
 
       - name: Verify the Vulkan device tests actually ran
         # These cases skip themselves when no Vulkan device is present, which would leave
