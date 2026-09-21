@@ -83,8 +83,10 @@ Current limitations are explicit: the existing shader manager still consumes its
 backend-specific source/binary fields, and the default CMake configure keeps artifact generation
 off so a Null/OpenGL-only checkout does not require every compiler and SDK. Release/CI configs
 can enable `UVE_BUILD_BUILTIN_SHADER_ARTIFACTS=ON` and build the aggregate
-`uve_builtin_shader_artifacts` target; that target currently covers the four compute built-ins
-used by the GPU workload proofs plus the deterministic `bindless_probe.glsl` B1 descriptor-set
-fixture. Migration of the remaining built-in graphics shaders and
-platform-native final compilation/validation remain open. The tool itself is already usable as a
-reproducible, target-aware artifact generator.
+`uve_builtin_shader_artifacts` target; the repository CI does this and runs `spirv-val` against
+every generated SPIR-V module. CI also runs SPIRV-Cross JSON reflection on
+`bindless_probe.vulkan.spv` and asserts that set 1 bindings 0, 1, and 2 are present. That target
+currently covers the four compute built-ins used by the GPU workload proofs plus the
+deterministic `bindless_probe.glsl` B1 descriptor-set fixture. Migration of the remaining built-in
+graphics shaders and platform-native final compilation/validation remain open. The tool itself is
+already usable as a reproducible, target-aware artifact generator.

@@ -244,9 +244,10 @@ publicly shipping real-time engines as of today, without naming any of them.
   `uve_builtin_shader_artifacts` target through `UVE_BUILD_BUILTIN_SHADER_ARTIFACTS=ON`; it
   covers the four compute built-ins used by the current GPU workload proofs plus the B1
   `bindless_probe.glsl` descriptor-set fixture, without forcing platform tools on default
-  Null/OpenGL builds. Remaining: mandatory release configuration,
-  migration of the remaining built-in graphics shaders, and platform-native final compilation
-  and validation; runtime compilation is deliberately not used.
+  Null/OpenGL builds. Repository CI now enables this target, runs `spirv-val` over every generated
+  SPIR-V module, and performs SPIRV-Cross JSON reflection checks for the B1 set-1 bindings.
+  Remaining: migration of the remaining built-in graphics shaders and platform-native final
+  compilation and validation; runtime compilation is deliberately not used.
 - [~] GPU compute-shader support (for culling, particle simulation, skinning, etc. on the
   GPU instead of the CPU) — RHI level completed with M5a (compute pipelines, DispatchUVE,
   SSBO write path) and M5b (STORAGE_IMAGE descriptors, GENERAL transitions + image barriers,

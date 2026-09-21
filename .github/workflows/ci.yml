@@ -40,16 +40,63 @@ jobs:
             libjpeg-dev \
             xvfb \
             libvulkan1 \
-            mesa-vulkan-drivers
+            mesa-vulkan-drivers \
+            glslang-tools \
+            spirv-tools \
+            spirv-cross
+
+      - name: Report shader toolchain
+        run: |
+          glslangValidator --version
+          spirv-val --version
+          spirv-cross --version || true
 
       - name: Math boundary check
         run: python3 Engine/Tools/check_math_boundary.py
 
       - name: Configure
-        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DUVE_BUILD_TESTS=ON
+        run: >-
+          cmake -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Debug
+          -DUVE_BUILD_TESTS=ON
+          -DUVE_BUILD_BUILTIN_SHADER_ARTIFACTS=ON
 
       - name: Build
         run: cmake --build build --parallel "$(nproc)"
+
+      - name: Build and validate offline shader artifacts
+        run: |
+          cmake --build build --target uve_builtin_shader_artifacts --parallel "$(nproc)"
+          find build/shaders -type f -name '*.spv' -print0 | while IFS= read -r -d '' shader; do
+            spirv-val --target-env vulkan1.2 "$shader"
+          done
+          spirv-cross build/shaders/bindless_probe/bindless_probe.vulkan.spv --reflect \
+            > build/shaders/bindless_probe/bindless_probe.reflection.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          reflection_path = Path("build/shaders/bindless_probe/bindless_probe.reflection.json")
+          reflection = json.loads(reflection_path.read_text(encoding="utf-8"))
+          expected = {
+              "textures": (1, 0),
+              "images": (1, 1),
+              "ssbos": (1, 2),
+          }
+          for resource_kind, (expected_set, expected_binding) in expected.items():
+              resources = reflection.get(resource_kind, [])
+              if not any(
+                  resource.get("set") == expected_set
+                  and resource.get("binding") == expected_binding
+                  for resource in resources
+              ):
+                  raise SystemExit(
+                      f"bindless_probe reflection missing {resource_kind} "
+                      f"set {expected_set}, binding {expected_binding}: {resources}"
+                  )
+          print("Validated bindless reflection: set 1 sampled-image, storage-image, "
+                "and storage-buffer bindings 0, 1, and 2")
+          PY
 
       - name: Test
         # Parallel, and both things that blocked it are fixed: every test process gets its own
