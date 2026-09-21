@@ -149,11 +149,17 @@ protected:
 
 TEST_F(VulkanRenderDeviceUVETest, DeviceReportsUsableWithHonestBootstrapName) {
     EXPECT_TRUE(device->IsUsableUVE());
-    // M5b: the reported name is capability-driven — a 1.3/dynamic-rendering device reports
-    // the current slice name (M5b), anything older reports the M2c classic one. Both are
-    // milestone-tagged; neither may be the bare "Vulkan" (honest capability contract).
+    // B1/M5b: the reported name is capability-driven — a dynamic-rendering device reports
+    // the current storage-image slice, and a native descriptor table adds the B1 prefix.
+    // Classic devices report the M2c fallback slice. Every accepted name is milestone-tagged;
+    // none may be the bare "Vulkan" (honest capability contract).
     const std::string_view name = device->GetBackendNameUVE();
-    EXPECT_TRUE(name == "Vulkan (M5b storage images)" || name == "Vulkan (M2c textures+staging)")
+    const bool knownName =
+        name == "Vulkan (B1 bindless + M5b storage images)" ||
+        name == "Vulkan (B1 bindless + M2c textures)" ||
+        name == "Vulkan (M5b storage images)" ||
+        name == "Vulkan (M2c textures+staging)";
+    EXPECT_TRUE(knownName)
         << "backend name must report the exact slice and capability gate, got: " << name;
 }
 
