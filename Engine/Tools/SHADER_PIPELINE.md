@@ -80,6 +80,10 @@ compiler and resource-layout validation. The fallback binding path remains manda
 Vulkan, OpenGL/GLES, and any device whose native descriptor capacity is exhausted.
 
 Current limitations are explicit: the existing shader manager still consumes its current
-backend-specific source/binary fields, and CMake has not yet made the artifact generation a
-mandatory default. Those are the next integration slice; this tool is already usable as a
+backend-specific source/binary fields, and the default CMake configure keeps artifact generation
+off so a Null/OpenGL-only checkout does not require every compiler and SDK. Release/CI configs
+can enable `UVE_BUILD_BUILTIN_SHADER_ARTIFACTS=ON` and build the aggregate
+`uve_builtin_shader_artifacts` target; that target currently covers the four compute built-ins
+used by the GPU workload proofs. Migration of the remaining built-in graphics shaders and
+platform-native final compilation/validation remain open. The tool itself is already usable as a
 reproducible, target-aware artifact generator.

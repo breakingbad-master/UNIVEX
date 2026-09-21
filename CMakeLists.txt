@@ -28,6 +28,37 @@ include(UveBuildConfiguration)
 include(UveFormatSupport)
 include(UveShaderPipeline)
 
+option(UVE_BUILD_BUILTIN_SHADER_ARTIFACTS
+    "Expose the reproducible offline cross-backend built-in shader artifact target" OFF)
+set(UVE_SHADER_ARTIFACT_DIRECTORY "${CMAKE_BINARY_DIR}/shaders" CACHE PATH
+    "Directory for generated UniVex shader artifacts")
+if(UVE_BUILD_BUILTIN_SHADER_ARTIFACTS)
+    set(_uve_builtin_shader_targets
+        vulkan
+        android-vulkan
+        opengl
+        gles
+        d3d12
+        metal
+        ios)
+    set(_uve_builtin_shader_artifact_targets)
+    foreach(_uve_shader IN ITEMS
+        frustum_cull
+        frustum_cull_indirect
+        mesh_skin
+        particle_simulate)
+        uve_add_shader_artifacts(
+            "uve_shader_artifact_${_uve_shader}"
+            SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/Engine/Runtime/RHI/Shader/built_in/${_uve_shader}.glsl"
+            STAGE comp
+            TARGETS ${_uve_builtin_shader_targets}
+            OUTPUT_DIRECTORY "${UVE_SHADER_ARTIFACT_DIRECTORY}/${_uve_shader}")
+        list(APPEND _uve_builtin_shader_artifact_targets "uve_shader_artifact_${_uve_shader}")
+    endforeach()
+    add_custom_target(uve_builtin_shader_artifacts)
+    add_dependencies(uve_builtin_shader_artifacts ${_uve_builtin_shader_artifact_targets})
+endif()
+
 include(FetchContent)
 set(JSON_BuildTests OFF CACHE INTERNAL "")
 set(JSON_Install OFF CACHE INTERNAL "")

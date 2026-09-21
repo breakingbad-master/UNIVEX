@@ -240,8 +240,12 @@ publicly shipping real-time engines as of today, without naming any of them.
 - [~] Shader cross-compilation so one shader source authors once and targets every backend
   — `Engine/Tools/compile_shaders.py` now provides a build-time GLSL → SPIR-V → generated
   GLSL/HLSL/MSL pipeline for Vulkan/Android Vulkan, OpenGL/GLES, D3D12, macOS, and iOS, with source hashes,
-  compiler versions, target artifacts, and a manifest. CMake/release integration and migration
-  of every existing built-in shader remain open; runtime compilation is deliberately not used.
+  compiler versions, target artifacts, and a manifest. CMake now exposes the opt-in aggregate
+  `uve_builtin_shader_artifacts` target through `UVE_BUILD_BUILTIN_SHADER_ARTIFACTS=ON`; it
+  covers the four compute built-ins used by the current GPU workload proofs without forcing
+  platform tools on default Null/OpenGL builds. Remaining: mandatory release configuration,
+  migration of the remaining built-in graphics shaders, and platform-native final compilation
+  and validation; runtime compilation is deliberately not used.
 - [~] GPU compute-shader support (for culling, particle simulation, skinning, etc. on the
   GPU instead of the CPU) — RHI level completed with M5a (compute pipelines, DispatchUVE,
   SSBO write path) and M5b (STORAGE_IMAGE descriptors, GENERAL transitions + image barriers,
