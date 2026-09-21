@@ -140,8 +140,14 @@ const std::string_view kFullscreenQuadSource = R"GLSLSRC(#version 450 core
 // Fullscreen triangle via the vertex-ID trick: no vertex buffer is required.
 layout(location = 0) out vec2 vTexCoord;
 
+#ifdef UVE_VULKAN
+#define UVE_FULLSCREEN_VERTEX_ID gl_VertexIndex
+#else
+#define UVE_FULLSCREEN_VERTEX_ID gl_VertexID
+#endif
+
 void main() {
-    vec2 position = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+    vec2 position = vec2((UVE_FULLSCREEN_VERTEX_ID << 1) & 2, UVE_FULLSCREEN_VERTEX_ID & 2);
     vTexCoord = position * 0.5;
     gl_Position = vec4(position * 2.0 - 1.0, 0.0, 1.0);
 }
@@ -1101,8 +1107,14 @@ uniform float uBloomThreshold;
 // Fullscreen triangle via the vertex-ID trick: no vertex buffer is required.
 layout(location = 0) out vec2 vTexCoord;
 
+#ifdef UVE_VULKAN
+#define UVE_FULLSCREEN_VERTEX_ID gl_VertexIndex
+#else
+#define UVE_FULLSCREEN_VERTEX_ID gl_VertexID
+#endif
+
 void main() {
-    vec2 position = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+    vec2 position = vec2((UVE_FULLSCREEN_VERTEX_ID << 1) & 2, UVE_FULLSCREEN_VERTEX_ID & 2);
     vTexCoord = position * 0.5;
     gl_Position = vec4(position * 2.0 - 1.0, 0.0, 1.0);
 }
@@ -1151,8 +1163,14 @@ uniform float uTexelSizeY;
 // Fullscreen triangle via the vertex-ID trick: no vertex buffer is required.
 layout(location = 0) out vec2 vTexCoord;
 
+#ifdef UVE_VULKAN
+#define UVE_FULLSCREEN_VERTEX_ID gl_VertexIndex
+#else
+#define UVE_FULLSCREEN_VERTEX_ID gl_VertexID
+#endif
+
 void main() {
-    vec2 position = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+    vec2 position = vec2((UVE_FULLSCREEN_VERTEX_ID << 1) & 2, UVE_FULLSCREEN_VERTEX_ID & 2);
     vTexCoord = position * 0.5;
     gl_Position = vec4(position * 2.0 - 1.0, 0.0, 1.0);
 }
@@ -1195,8 +1213,14 @@ const std::string_view kFullscreenCopySource = R"GLSLSRC(#version 450 core
 // Fullscreen triangle via the vertex-ID trick: no vertex buffer is required.
 layout(location = 0) out vec2 vTexCoord;
 
+#ifdef UVE_VULKAN
+#define UVE_FULLSCREEN_VERTEX_ID gl_VertexIndex
+#else
+#define UVE_FULLSCREEN_VERTEX_ID gl_VertexID
+#endif
+
 void main() {
-    vec2 position = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+    vec2 position = vec2((UVE_FULLSCREEN_VERTEX_ID << 1) & 2, UVE_FULLSCREEN_VERTEX_ID & 2);
     vTexCoord = position * 0.5;
     gl_Position = vec4(position * 2.0 - 1.0, 0.0, 1.0);
 }
@@ -1248,8 +1272,14 @@ uniform float uIntensity;
 // Fullscreen triangle via the vertex-ID trick: no vertex buffer is required.
 layout(location = 0) out vec2 vTexCoord;
 
+#ifdef UVE_VULKAN
+#define UVE_FULLSCREEN_VERTEX_ID gl_VertexIndex
+#else
+#define UVE_FULLSCREEN_VERTEX_ID gl_VertexID
+#endif
+
 void main() {
-    vec2 position = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+    vec2 position = vec2((UVE_FULLSCREEN_VERTEX_ID << 1) & 2, UVE_FULLSCREEN_VERTEX_ID & 2);
     vTexCoord = position * 0.5;
     gl_Position = vec4(position * 2.0 - 1.0, 0.0, 1.0);
 }
