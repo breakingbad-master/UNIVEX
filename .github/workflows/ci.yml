@@ -105,6 +105,10 @@ jobs:
         # leaves a worker holding the last reference to something it is about to outlive.
         run: xvfb-run -a ctest --test-dir build --output-on-failure -j"$(nproc)"
 
+      - name: Print test failure log
+        if: failure()
+        run: cat build/Testing/Temporary/LastTest.log
+
       - name: Verify the Vulkan device tests actually ran
         # These cases skip themselves when no Vulkan device is present, which would leave
         # the backend untested while CI stayed green. Fail loudly if the runner loses it.
