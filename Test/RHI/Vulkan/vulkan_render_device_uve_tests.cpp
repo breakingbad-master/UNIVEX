@@ -3537,6 +3537,75 @@ TEST_F(VulkanRenderDeviceUVETest, FragmentImageStoreWritesTextureAndNextFrameIma
     device->DestroyShaderUVE(loadShader);
 }
 
+TEST_F(VulkanRenderDeviceUVETest, BindlessCapabilityAndResourcePublicationAreConsistent) {
+    // B1 fallback/lifetime proof: the device must expose native indices only when the complete
+    // native table is live. Unsupported devices keep every query on the invalid sentinel, while
+    // a capable device publishes only the descriptor classes its fixed Vulkan layout can safely
+    // represent (RGBA8 storage images and storage-capable buffers). Destruction must invalidate
+    // the public query before the handle can ever be reused by caller code.
+    const RenderDeviceCapabilitiesUVE capabilities = device->GetCapabilitiesUVE();
+    const bool nativeBindless = capabilities.supportsBindlessResources &&
+                                capabilities.supportsDescriptorIndexing;
+    EXPECT_EQ(capabilities.tier, ComputeRenderFeatureTierUVE(capabilities));
+
+    TextureDescUVE rgba8Desc{};
+    rgba8Desc.width = 1U;
+    rgba8Desc.height = 1U;
+    rgba8Desc.format = TextureFormatUVE::RGBA8Unorm;
+    const TextureHandleUVE rgba8Texture = device->CreateTextureUVE(rgba8Desc);
+    ASSERT_NE(rgba8Texture, kInvalidTextureHandleUVE);
+
+    TextureDescUVE rgba16Desc = rgba8Desc;
+    rgba16Desc.format = TextureFormatUVE::RGBA16Float;
+    const TextureHandleUVE rgba16Texture = device->CreateTextureUVE(rgba16Desc);
+    ASSERT_NE(rgba16Texture, kInvalidTextureHandleUVE);
+
+    TextureDescUVE depthDesc = rgba8Desc;
+    depthDesc.format = TextureFormatUVE::Depth32Float;
+    const TextureHandleUVE depthTexture = device->CreateTextureUVE(depthDesc);
+    ASSERT_NE(depthTexture, kInvalidTextureHandleUVE);
+
+    BufferDescUVE storageDesc{};
+    storageDesc.sizeBytes = 16U;
+    storageDesc.usage = BufferUsageUVE::Storage;
+    const BufferHandleUVE storageBuffer = device->CreateBufferUVE(storageDesc);
+    ASSERT_NE(storageBuffer, kInvalidBufferHandleUVE);
+
+    if (nativeBindless) {
+        ASSERT_GT(capabilities.maxSampledTextures, 0U);
+        ASSERT_GT(capabilities.maxStorageImages, 0U);
+        ASSERT_GT(capabilities.maxStorageBuffers, 0U);
+        EXPECT_LT(device->GetBindlessSampledTextureSlotUVE(rgba8Texture),
+                  capabilities.maxSampledTextures);
+        EXPECT_LT(device->GetBindlessStorageTextureSlotUVE(rgba8Texture),
+                  capabilities.maxStorageImages);
+        EXPECT_EQ(device->GetBindlessStorageTextureSlotUVE(rgba16Texture),
+                  kInvalidBindlessResourceSlotUVE);
+        EXPECT_EQ(device->GetBindlessStorageTextureSlotUVE(depthTexture),
+                  kInvalidBindlessResourceSlotUVE);
+        EXPECT_LT(device->GetBindlessStorageBufferSlotUVE(storageBuffer),
+                  capabilities.maxStorageBuffers);
+    } else {
+        EXPECT_EQ(device->GetBindlessSampledTextureSlotUVE(rgba8Texture),
+                  kInvalidBindlessResourceSlotUVE);
+        EXPECT_EQ(device->GetBindlessStorageTextureSlotUVE(rgba8Texture),
+                  kInvalidBindlessResourceSlotUVE);
+        EXPECT_EQ(device->GetBindlessStorageBufferSlotUVE(storageBuffer),
+                  kInvalidBindlessResourceSlotUVE);
+    }
+
+    device->DestroyTextureUVE(rgba8Texture);
+    device->DestroyTextureUVE(rgba16Texture);
+    device->DestroyTextureUVE(depthTexture);
+    device->DestroyBufferUVE(storageBuffer);
+    EXPECT_EQ(device->GetBindlessSampledTextureSlotUVE(rgba8Texture),
+              kInvalidBindlessResourceSlotUVE);
+    EXPECT_EQ(device->GetBindlessStorageTextureSlotUVE(rgba8Texture),
+              kInvalidBindlessResourceSlotUVE);
+    EXPECT_EQ(device->GetBindlessStorageBufferSlotUVE(storageBuffer),
+              kInvalidBindlessResourceSlotUVE);
+}
+
 TEST_F(VulkanRenderDeviceUVETest, DepthTextureInStorageSlotFallsBackToSinkAndFrameSurvives) {
     // The M5b depth-in-storage-slot contract: imageStore into a DEPTH image is refused by
     // design, so binding a Depth32Float texture to a storage-image slot deterministically
