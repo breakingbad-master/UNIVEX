@@ -324,10 +324,12 @@ publicly shipping real-time engines as of today, without naming any of them.
   set 0 and the existing tuple descriptors remain the fallback/migration path. The shared
   shader convention and artifact documentation are recorded in `Engine/Tools/SHADER_PIPELINE.md`.
   A Vulkan integration test now checks capability-gated slot publication, format restrictions,
-  destruction invalidation, and a construction-time forced fallback on the same driver; CI still
-  needs to execute that test with validation layers. Remaining evidence is descriptor-array shader
-  artifacts migrated from built-ins, capacity/performance measurements, and native D3D12
-  descriptor heaps plus Metal argument buffers/mobile validation.
+  destruction invalidation, and a construction-time forced fallback on the same driver. CI now
+  compiles and SPIR-V-validates the B1 fixture, reflects its set-1 bindings, runs the focused
+  Vulkan suite with `VK_LAYER_KHRONOS_validation`, and confirms the full test suite remains green.
+  Remaining evidence is descriptor-array shader artifacts migrated from built-ins,
+  capacity/performance measurements, and native D3D12 descriptor heaps plus Metal argument
+  buffers/mobile validation.
 
 ---
 
