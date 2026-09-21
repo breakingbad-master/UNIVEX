@@ -15,6 +15,17 @@ namespace UVE::Render {
 
 inline constexpr std::uint32_t kInvalidBindlessResourceSlotUVE = 0xFFFFFFFFU;
 
+// Native shader contract shared by every descriptor-indexing backend.  Set 0 remains available
+// for backend-neutral uniforms/legacy tuple bindings; set 1 is reserved for these fixed arrays.
+// Fixed arrays keep the optional tier usable without requiring runtimeDescriptorArray on Vulkan
+// or an unbounded heap declaration on D3D12/Metal. A backend may expose a smaller effective
+// capacity only by declining the native tier and using the bounded fallback.
+inline constexpr std::uint32_t kNativeBindlessDescriptorSetUVE = 1U;
+inline constexpr std::uint32_t kNativeBindlessSampledTextureBindingUVE = 0U;
+inline constexpr std::uint32_t kNativeBindlessStorageTextureBindingUVE = 1U;
+inline constexpr std::uint32_t kNativeBindlessStorageBufferBindingUVE = 2U;
+inline constexpr std::uint32_t kNativeBindlessResourceArrayCapacityUVE = 256U;
+
 /// A stable logical resource reference passed to material/compute code.  The generation is
 /// checked on every resolve, so a slot recycled after destruction cannot turn a stale shader
 /// parameter into an unrelated texture or storage buffer.

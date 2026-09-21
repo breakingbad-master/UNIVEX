@@ -876,6 +876,17 @@ TEST(NullRenderDeviceUVETest, GetCapabilitiesUVE_ReportsLowNonGpuProfile) {
     EXPECT_FALSE(IsRenderFeatureTierAtLeastUVE(capabilities.tier, RenderFeatureTierUVE::Baseline));
 }
 
+TEST(NullRenderDeviceUVETest, NativeBindlessQueriesUseDeterministicFallbackWhenUnsupported) {
+    NullRenderDeviceUVE device;
+
+    EXPECT_EQ(device.GetBindlessSampledTextureSlotUVE(TextureHandleUVE{1U}),
+              kInvalidBindlessResourceSlotUVE);
+    EXPECT_EQ(device.GetBindlessStorageTextureSlotUVE(TextureHandleUVE{1U}),
+              kInvalidBindlessResourceSlotUVE);
+    EXPECT_EQ(device.GetBindlessStorageBufferSlotUVE(BufferHandleUVE{1U}),
+              kInvalidBindlessResourceSlotUVE);
+}
+
 TEST(BindlessResourceTableUVETest, GenerationRejectsStaleHandleAndReusesSlotSafely) {
     BindlessResourceTableUVE table(BindlessResourceTableDescUVE{1U, 1U, 1U});
 

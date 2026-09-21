@@ -308,10 +308,18 @@ publicly shipping real-time engines as of today, without naming any of them.
   Remaining for this program is GPU-resident particle emission/compaction and verification on
   every new native backend.
 - [~] Bindless/descriptor-indexing-style resource binding for reduced per-draw overhead — the
-  backend-neutral `BindlessResourceTableUVE` now provides bounded per-kind descriptor arrays,
+  backend-neutral `BindlessResourceTableUVE` provides bounded per-kind descriptor arrays,
   stable slots, generation-checked handles, deterministic exhaustion, and a shared fallback
-  contract for low-tier devices. Native descriptor heaps/indexing in Vulkan, D3D12, and Metal
-  plus shader-side resource-index bindings remain open.
+  contract for low-tier devices. Vulkan B1 now negotiates the optional Vulkan 1.2 descriptor-
+  indexing prerequisites, creates a dedicated fixed 256-entry global set at shader set 1,
+  publishes native sampled texture, RGBA8 storage-image, and storage-buffer indices through the
+  RHI, and replaces destroyed entries with deterministic white/black/zero sinks before recycling
+  slots;
+  set 0 and the existing tuple descriptors remain the fallback/migration path. The shared
+  shader convention and artifact documentation are recorded in `Engine/Tools/SHADER_PIPELINE.md`.
+  Remaining evidence is real Vulkan GPU/validation-layer coverage, descriptor-array shader
+  artifacts migrated from built-ins, capacity/performance measurements, and native D3D12
+  descriptor heaps plus Metal argument buffers/mobile validation.
 
 ---
 

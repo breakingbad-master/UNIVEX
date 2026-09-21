@@ -140,15 +140,34 @@
 // all, and the mutable-format 4x8 compatibility class makes the alias legal. Sampling
 // and attachment views are untouched.
 //
+// Slice B1 ("native bindless descriptor set") added 2026-09-21: Vulkan 1.2 feature
+// negotiation optionally enables descriptor indexing when non-uniform sampled-image,
+// storage-image, storage-buffer, partially-bound, and fixed-array descriptor-limit prerequisites
+// are all present. A dedicated
+// global set at descriptor set 1 owns fixed 256-entry arrays (combined sampled images, storage
+// images, and storage buffers); set 0 remains the existing tuple/fallback layout, so legacy
+// shaders and migrated bindless shaders coexist. Resource creation writes a live entry and
+// public GetBindless*SlotUVE queries return its native array index; destruction first replaces
+// the entry with the deterministic white/black/zero sink, then recycles the bounded slot.
+// Resource creation/destruction serialize descriptor writes with the one Vulkan queue rather
+// than requiring UPDATE_AFTER_BIND. Bindless-capable color images use GENERAL as their rest
+// layout so a storage index is immediately valid; devices that fail negotiation, layout/pool
+// creation, or the fixed capacity continue through the deterministic tuple descriptors and
+// report no bindless capability. Shader convention: set 1, binding 0 is a 256-element
+// `sampler2D` array, binding 1 a 256-element storage-image array, and binding 2 a 256-element
+// storage-buffer array; every other descriptor belongs to the set-0 legacy contract.
+//
 // Capability reporting is honest and upstream-visible: GetBackendNameUVE() says
-// "Vulkan (M5b storage images)" on dynamic-rendering devices, "Vulkan (M2c textures+staging)"
-// on classic ones — never "Vulkan" unqualified — so logs, editor overlays, and bug reports
-// cannot mistake the current slice for the finished backend, and IsUsableUVE() reflects the
-// real instance/device/swapchain bring-up result.
+// "Vulkan (B1 bindless + M5b storage images)" or "Vulkan (B1 bindless + M2c textures)"
+// when the optional native table is live, and the corresponding M5b/M2c name otherwise —
+// never "Vulkan" unqualified — so logs, editor overlays, and bug reports cannot mistake the
+// current slice for the finished backend. IsUsableUVE() reflects the real
+// instance/device/swapchain bring-up result.
 
 
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -256,6 +275,12 @@ public:
     /// no-op, never an error, mirroring the GL device's minimization contract.
     void PresentUVE() override;
 
+    [[nodiscard]] std::uint32_t GetBindlessSampledTextureSlotUVE(
+        TextureHandleUVE texture) const noexcept override;
+    [[nodiscard]] std::uint32_t GetBindlessStorageTextureSlotUVE(
+        TextureHandleUVE texture) const noexcept override;
+    [[nodiscard]] std::uint32_t GetBindlessStorageBufferSlotUVE(
+        BufferHandleUVE buffer) const noexcept override;
     [[nodiscard]] RenderDeviceCapabilitiesUVE GetCapabilitiesUVE() const noexcept override;
     [[nodiscard]] bool IsUsableUVE() const noexcept override;
     [[nodiscard]] std::string_view GetBackendNameUVE() const noexcept override;

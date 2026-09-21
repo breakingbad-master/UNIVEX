@@ -11,6 +11,7 @@
 #include <string_view>
 #include <vector>
 
+#include "uve/rhi/bindless_resource_table_uve.h"
 #include "uve/rhi/buffer_handle_uve.h"
 #include "uve/rhi/i_command_buffer_uve.h"
 #include "uve/rhi/pipeline_handle_uve.h"
@@ -165,6 +166,27 @@ public:
     /// GetPresentCallCountUVE()); a windowless backend that never renders to a window has nothing
     /// meaningful to do here either.
     virtual void PresentUVE() = 0;
+
+    /// Returns the backend-facing index for a live resource in the native bindless table.  The
+    /// default is the deterministic fallback answer: callers must use the bounded BindTexture /
+    /// BindStorageBuffer path when the sentinel is returned.  Native backends override these
+    /// methods only after they have actually enabled and populated their descriptor table.  The
+    /// returned integer is valid only while the resource lives; callers must refresh material
+    /// indices after destruction/recreation. Native backends replace destroyed descriptors with
+    /// a deterministic sink before recycling the slot, so an accidental stale read is bounded
+    /// rather than a dangling native handle.
+    [[nodiscard]] virtual std::uint32_t GetBindlessSampledTextureSlotUVE(
+        TextureHandleUVE /*texture*/) const noexcept {
+        return kInvalidBindlessResourceSlotUVE;
+    }
+    [[nodiscard]] virtual std::uint32_t GetBindlessStorageTextureSlotUVE(
+        TextureHandleUVE /*texture*/) const noexcept {
+        return kInvalidBindlessResourceSlotUVE;
+    }
+    [[nodiscard]] virtual std::uint32_t GetBindlessStorageBufferSlotUVE(
+        BufferHandleUVE /*buffer*/) const noexcept {
+        return kInvalidBindlessResourceSlotUVE;
+    }
 
     /// Returns the negotiated feature snapshot for this device.  The default keeps source and
     /// binary compatibility for small test doubles that implement the RHI but predate capability
