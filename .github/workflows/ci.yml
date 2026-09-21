@@ -116,10 +116,17 @@ jobs:
             tail -n 500 "$log"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-          failure_summary=$(awk '/The following tests FAILED:/{capture=1} capture{printf "%s\\n", $0}' "$log" | tail -n 80)
-          if [ -n "$failure_summary" ]; then
-            encoded_summary=$(printf '%s' "$failure_summary" | python3 -c 'import sys; print(sys.stdin.read().replace("%", "%25").replace("\\n", "%0A").replace("\\r", "%0D"), end="")')
-            echo "::error title=CTest failures::$encoded_summary"
+          failed_tests=build/Testing/Temporary/LastTestsFailed.log
+          if [ -f "$failed_tests" ]; then
+            echo "## Failed test names" >> "$GITHUB_STEP_SUMMARY"
+            echo '```text' >> "$GITHUB_STEP_SUMMARY"
+            cat "$failed_tests" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            while IFS= read -r failed_test; do
+              [ -z "$failed_test" ] && continue
+              encoded_test=$(printf '%s' "$failed_test" | python3 -c 'import sys; print(sys.stdin.read().replace("%", "%25").replace("\\n", "%0A").replace("\\r", "%0D"), end="")')
+              echo "::error title=CTest failed test::$encoded_test"
+            done < "$failed_tests"
           fi
 
       - name: Verify the Vulkan device tests actually ran
