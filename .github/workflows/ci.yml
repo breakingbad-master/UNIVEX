@@ -107,7 +107,20 @@ jobs:
 
       - name: Print test failure log
         if: failure()
-        run: cat build/Testing/Temporary/LastTest.log
+        run: |
+          log=build/Testing/Temporary/LastTest.log
+          cat "$log"
+          {
+            echo "## CTest failure log"
+            echo '```text'
+            tail -n 500 "$log"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          failure_summary=$(awk '/The following tests FAILED:/{capture=1} capture{printf "%s\\n", $0}' "$log" | tail -n 80)
+          if [ -n "$failure_summary" ]; then
+            encoded_summary=$(printf '%s' "$failure_summary" | python3 -c 'import sys; print(sys.stdin.read().replace("%", "%25").replace("\\n", "%0A").replace("\\r", "%0D"), end="")')
+            echo "::error title=CTest failures::$encoded_summary"
+          fi
 
       - name: Verify the Vulkan device tests actually ran
         # These cases skip themselves when no Vulkan device is present, which would leave
