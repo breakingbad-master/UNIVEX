@@ -349,6 +349,27 @@ struct CookedArtifactFormatUVE {
     return false;
 }
 
+[[nodiscard]] bool IsSafeCookedArtifactKeyUVE(const std::string_view key) noexcept {
+    if (key.empty() || key.front() == '/' || key.back() == '/' || key.find('\\') != std::string_view::npos ||
+        key.find('\0') != std::string_view::npos || key.find(':') != std::string_view::npos) {
+        return false;
+    }
+    std::size_t segmentStart = 0U;
+    while (segmentStart < key.size()) {
+        const std::size_t separator = key.find('/', segmentStart);
+        const std::size_t segmentEnd = separator == std::string_view::npos ? key.size() : separator;
+        const std::string_view segment = key.substr(segmentStart, segmentEnd - segmentStart);
+        if (segment.empty() || segment == "." || segment == "..") {
+            return false;
+        }
+        if (separator == std::string_view::npos) {
+            break;
+        }
+        segmentStart = separator + 1U;
+    }
+    return true;
+}
+
 [[nodiscard]] std::optional<CookedShaderArtifactUVE> TryReadCookedArtifactUVE(
     ShaderManagerUVE::ImplUVE& impl, const ShaderSourceCompileDescUVE& desc) {
     if (!impl.config.preferCookedArtifactsUVE || impl.config.cookedArtifactMountPrefixUVE.empty() ||
@@ -387,11 +408,18 @@ struct CookedArtifactFormatUVE {
     if (stem.empty() || stem == "." || stem == "..") {
         return std::nullopt;
     }
+    // Legacy built-ins use the filename stem as their artifact directory. Imported assets can
+    // persist a path-derived key (`materials/stone`) so same-named files in separate source
+    // directories remain distinct in one cooked mount.
+    const std::string artifactKey = desc.cookedArtifactKeyUVE.empty() ? stem : desc.cookedArtifactKeyUVE;
+    if (!IsSafeCookedArtifactKeyUVE(artifactKey)) {
+        return std::nullopt;
+    }
     std::string virtualPath = impl.config.cookedArtifactMountPrefixUVE;
     if (!virtualPath.empty() && virtualPath.back() != '/') {
         virtualPath += '/';
     }
-    virtualPath += stem;
+    virtualPath += artifactKey;
     virtualPath += '/';
     if (!variant->empty()) {
         virtualPath += *variant;
@@ -470,12 +498,12 @@ struct CookedArtifactFormatUVE {
     ShaderManagerUVE::ImplUVE::ProgramRequestDescUVE request;
     request.debugNameUVE = desc.debugNameUVE;
     request.vertexSource = NormalizeProgramStageDescUVE(
-        ShaderSourceCompileDescUVE{ShaderStageUVE::Vertex, desc.virtualFilePath, desc.embeddedFallbackSourceCode,
-                                   desc.extraDefines, desc.entryPointName, false, {}},
+        ShaderSourceCompileDescUVE{ShaderStageUVE::Vertex, desc.virtualFilePath, {},
+                                   desc.embeddedFallbackSourceCode, desc.extraDefines, desc.entryPointName, false, {}},
         ShaderStageUVE::Vertex, request.debugNameUVE);
     request.fragmentSource = NormalizeProgramStageDescUVE(
-        ShaderSourceCompileDescUVE{ShaderStageUVE::Fragment, desc.virtualFilePath, desc.embeddedFallbackSourceCode,
-                                   desc.extraDefines, desc.entryPointName, false, {}},
+        ShaderSourceCompileDescUVE{ShaderStageUVE::Fragment, desc.virtualFilePath, {},
+                                   desc.embeddedFallbackSourceCode, desc.extraDefines, desc.entryPointName, false, {}},
         ShaderStageUVE::Fragment, request.debugNameUVE);
     request.vertexLayout = desc.vertexLayout;
     request.vertexStride = desc.vertexStride;

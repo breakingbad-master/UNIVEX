@@ -54,11 +54,14 @@ python3 Engine/Tools/compile_shaders.py \
   --out-dir build/shaders/basic_3d/vert
 ```
 
-The cooked runtime layout mirrors the CMake output: `<mount>/<stem>/<stage>/<stem>.<target>.<ext>`
-for the base variant, and `<mount>/<stem>/<variant>/<stage>/<stem>.<target>.<ext>` for named
+The cooked runtime layout mirrors the CMake output: `<mount>/<artifact-key>/<stage>/<stem>.<target>.<ext>`
+for the base variant, and `<mount>/<artifact-key>/<variant>/<stage>/<stem>.<target>.<ext>` for named
 variants such as `instanced`, `bindless`, and `instanced_bindless`. ShaderManagerUVE canonicalizes
 those two material axes and tries the matching path for a backend-native artifact; an unknown define
-set never reuses a different variant. It falls back to authoring source when the artifact is absent.
+set never reuses a different variant. Legacy descriptors leave `artifact-key` empty and retain the
+filename-stem layout used by the built-in tree. Imported shader assets should persist a path-derived
+key (for example, `materials/stone`) so two `stone.vert` files in different directories cannot
+collide. It falls back to authoring source when the artifact is absent.
 The instanced GLES artifact is explicitly ESSL 3.10 because SSBOs do not exist in ES 3.0; the
 runtime must select the ordinary (non-instanced) fallback on an ES 3.0 device. `UVE_BINDLESS` is
 currently selected only for a Vulkan device that reports the native descriptor-indexing tier; every
@@ -67,6 +70,53 @@ other backend/tier compiles the same material through the fixed-slot path.
 The compiler executables are intentionally discovered when the tool is invoked. A platform SDK
 is therefore required only for the targets that a developer or CI job requests. The shipped
 runtime never depends on either executable.
+
+## Imported material packaging
+
+A raw `.vert`, `.frag`, or `.comp` import can carry the source identity needed by the runtime
+artifact selector without putting a host filesystem path into a scene. Pass
+`Asset::ShaderImportSettingsUVE::virtualFilePath` when importing the source; the importer stores
+that VFS path in `ShaderAssetUVE::virtualFilePath` and derives its `cookedArtifactKey` by removing
+the source extension. An explicit `cookedArtifactKey` is available when vertex and fragment files
+need to share a directory or when a project has a different package naming policy. The path uses
+forward slashes and must be relative; absolute paths, `..`, and backslashes are rejected before the
+asset is published.
+
+For example, two stages of one custom material can be packaged into one collision-safe tree:
+
+```text
+materials/stone.vert  -> virtualFilePath materials/stone.vert
+materials/stone.frag  -> virtualFilePath materials/stone.frag
+                               cookedArtifactKey materials/stone
+```
+
+The corresponding build steps use the same key as the output directory. They can be expressed as
+`uve_add_shader_artifacts()` calls in a project's CMake file, or directly with the tool:
+
+```sh
+python3 Engine/Tools/compile_shaders.py materials/stone.vert \
+  --stage vert --target vulkan --target android-vulkan --target opengl --target gles --target d3d12 --target metal --target ios \
+  --define VERTEX_SHADER --target-define vulkan=UVE_VULKAN \
+  --target-define android-vulkan=UVE_VULKAN --target-define gles=UVE_GLES \
+  --out-dir build/shaders/materials/stone/vert
+
+python3 Engine/Tools/compile_shaders.py materials/stone.frag \
+  --stage frag --target vulkan --target android-vulkan --target opengl --target gles --target d3d12 --target metal --target ios \
+  --define FRAGMENT_SHADER --target-define vulkan=UVE_VULKAN \
+  --target-define android-vulkan=UVE_VULKAN --target-define gles=UVE_GLES \
+  --out-dir build/shaders/materials/stone/frag
+```
+
+If the material opts into the native Vulkan material tier, both source stages must contain
+`UVE_BINDLESS_MATERIAL_CONTRACT`, both artifact builds must add `--define UVE_BINDLESS`, and the
+variant output goes below `build/shaders/materials/stone/bindless/<stage>`. Instanced material
+stages similarly add `UVE_INSTANCED`; using both defines selects `instanced_bindless`. The material
+asset does not need to know which backend is active: Renderer3DUVE passes each shader asset's
+metadata to ShaderManagerUVE, which validates the source fingerprint and target policy before
+selecting a package. Missing/stale packages use the embedded source where the active backend can
+compile it, and unsupported Vulkan devices remain on the fixed-slot path. This is the generic
+imported-material route; canonical built-in lit assets continue to receive their compatibility
+`shaders/lit_shadowed_3d.glsl` identity automatically.
 
 ## Optional native bindless convention
 

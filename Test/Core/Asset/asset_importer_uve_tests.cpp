@@ -17,6 +17,7 @@
 
 #include "uve/asset/asset_database_uve.h"
 #include "uve/asset/shader_asset_uve.h"
+#include "uve/asset/shader_source_importer_uve.h"
 #include "uve/logging/log_sink_uve.h"
 #include "uve/logging/logger_uve.h"
 
@@ -346,6 +347,28 @@ TEST_F(AssetImporterUVETest, ImportUVE_RawShaderSource_InfersStageAndPublishesTy
         std::filesystem::remove(sourcePath);
         std::filesystem::remove(destinationPath);
     }
+}
+
+TEST_F(AssetImporterUVETest, ImportUVE_RawShaderSource_PersistsCanonicalVirtualPathSettings) {
+    const std::filesystem::path sourcePath = "uve_asset_importer_raw_shader_with_virtual_path.frag";
+    const std::filesystem::path destinationPath = "uve_asset_importer_raw_shader_with_virtual_path.uveshader";
+    std::filesystem::remove(sourcePath);
+    std::filesystem::remove(destinationPath);
+    WriteFixtureFileUVE(sourcePath, "#version 450\nvoid main() {}\n");
+
+    ShaderImportSettingsUVE settings;
+    settings.virtualFilePath = "materials/stone.frag";
+    const AssetGuidUVE guid = importer.ImportUVE(sourcePath, destinationPath, assetDatabase, settings);
+
+    ASSERT_NE(guid, kInvalidAssetGuidUVE);
+    ShaderAssetUVE shader;
+    ASSERT_TRUE(LoadShaderAssetUVE(destinationPath, shader));
+    EXPECT_EQ(shader.virtualFilePath, settings.virtualFilePath);
+    EXPECT_EQ(shader.cookedArtifactKey, "materials/stone");
+    EXPECT_NE(settings.GetCacheVersionUVE(), AssetImportSettingsUVE{}.GetCacheVersionUVE());
+
+    std::filesystem::remove(sourcePath);
+    std::filesystem::remove(destinationPath);
 }
 
 TEST_F(AssetImporterUVETest, ImportUVE_RawShaderSource_RejectsEmptySourceAndPreservesDestination) {

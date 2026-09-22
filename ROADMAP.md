@@ -256,9 +256,10 @@ publicly shipping real-time engines as of today, without naming any of them.
   SPIRV-Cross JSON reflection checks for the B1 set-1 bindings. The built-in lit material now has an
   explicit, capability-gated `UVE_BINDLESS_MATERIAL_CONTRACT`: Vulkan binds its material textures
   from set 1 while shadow samplers remain in set 0, and unsupported/exhausted devices retain the
-  fixed-slot path. Remaining: platform-native final compilation, hardware validation, generic
-  imported-material cooked artifact packaging, and broader runtime artifact packaging; runtime
-  source compilation remains the deterministic fallback where valid.
+  fixed-slot path. Remaining: platform-native final compilation, hardware validation, and broader
+  runtime artifact packaging; imported `.vert`/`.frag`/`.comp` materials now carry validated VFS
+  source identities and collision-safe cooked-artifact keys through the asset importer and renderer.
+  Runtime source compilation remains the deterministic fallback where valid.
 - [~] GPU compute-shader support (for culling, particle simulation, skinning, etc. on the
   GPU instead of the CPU) — RHI level completed with M5a (compute pipelines, DispatchUVE,
   SSBO write path) and M5b (STORAGE_IMAGE descriptors, GENERAL transitions + image barriers,
@@ -341,9 +342,10 @@ publicly shipping real-time engines as of today, without naming any of them.
   fixed-slot material draws. CI compiles and SPIR-V-validates the B1 fixture and lit bindless
   variants, reflects their set-1 bindings, runs the focused Vulkan suite with
   `VK_LAYER_KHRONOS_validation`, and confirms the full test suite remains green. Remaining evidence
-  is real-device material pixel validation, capacity/performance measurements, generic imported
-  material packaging, and native D3D12 descriptor heaps plus Metal argument buffers/mobile
-  validation.
+  is real-device material pixel validation, capacity/performance measurements, and native D3D12
+  descriptor heaps plus Metal argument buffers/mobile validation; generic imported-material
+  packaging now carries a validated VFS source identity and collision-safe cooked-artifact key from
+  the shader importer through Renderer3DUVE and ShaderManagerUVE.
 
 ---
 

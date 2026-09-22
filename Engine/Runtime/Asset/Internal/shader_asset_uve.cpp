@@ -23,6 +23,33 @@ namespace {
 
 } // namespace
 
+bool IsValidShaderVirtualFilePathUVE(const std::string_view virtualFilePath) noexcept {
+    if (virtualFilePath.empty()) {
+        return true;
+    }
+    if (virtualFilePath.front() == '/' || virtualFilePath.back() == '/' ||
+        virtualFilePath.find('\\') != std::string_view::npos ||
+        virtualFilePath.find('\0') != std::string_view::npos ||
+        virtualFilePath.find(':') != std::string_view::npos) {
+        return false;
+    }
+
+    std::size_t segmentStart = 0U;
+    while (segmentStart < virtualFilePath.size()) {
+        const std::size_t separator = virtualFilePath.find('/', segmentStart);
+        const std::size_t segmentEnd = separator == std::string_view::npos ? virtualFilePath.size() : separator;
+        const std::string_view segment = virtualFilePath.substr(segmentStart, segmentEnd - segmentStart);
+        if (segment.empty() || segment == "." || segment == "..") {
+            return false;
+        }
+        if (separator == std::string_view::npos) {
+            break;
+        }
+        segmentStart = separator + 1U;
+    }
+    return true;
+}
+
 bool LoadShaderAssetUVE(const std::filesystem::path& path, ShaderAssetUVE& outShader) {
     const std::optional<std::pair<UveFileHeaderUVE, std::vector<std::byte>>> file = ReadUveFileUVE(path);
     if (!file.has_value()) {
@@ -51,6 +78,8 @@ bool LoadShaderAssetUVE(const std::filesystem::path& path, ShaderAssetUVE& outSh
         stageValue = payload.at("stage").get<std::uint8_t>();
         shader.sourceCode = payload.at("sourceCode").get<std::string>();
         shader.entryPointName = payload.value("entryPointName", std::string("main"));
+        shader.virtualFilePath = payload.value("virtualFilePath", std::string{});
+        shader.cookedArtifactKey = payload.value("cookedArtifactKey", std::string{});
     } catch (const nlohmann::json::exception& fieldError) {
         UVE_ERROR("ShaderAssetUVE: \"{}\" is missing an expected field: {}", path.string(), fieldError.what());
         return false;
@@ -65,6 +94,12 @@ bool LoadShaderAssetUVE(const std::filesystem::path& path, ShaderAssetUVE& outSh
         UVE_ERROR("ShaderAssetUVE: \"{}\" has empty source code", path.string());
         return false;
     }
+    if (!IsValidShaderVirtualFilePathUVE(shader.virtualFilePath) ||
+        !IsValidShaderVirtualFilePathUVE(shader.cookedArtifactKey)) {
+        UVE_ERROR("ShaderAssetUVE: \"{}\" has an invalid virtual authoring path or cooked artifact key",
+                  path.string());
+        return false;
+    }
 
     outShader = std::move(shader);
     return true;
@@ -75,10 +110,18 @@ bool SaveShaderAssetUVE(const ShaderAssetUVE& shader, const std::filesystem::pat
         UVE_ERROR("ShaderAssetUVE: refusing to save an unknown shader stage to {}", path.string());
         return false;
     }
+    if (!IsValidShaderVirtualFilePathUVE(shader.virtualFilePath) ||
+        !IsValidShaderVirtualFilePathUVE(shader.cookedArtifactKey)) {
+        UVE_ERROR("ShaderAssetUVE: refusing to save invalid virtual authoring path or cooked artifact key to {}",
+                  path.string());
+        return false;
+    }
     nlohmann::json payload;
     payload["stage"] = static_cast<std::uint8_t>(shader.stage);
     payload["sourceCode"] = shader.sourceCode;
     payload["entryPointName"] = shader.entryPointName;
+    payload["virtualFilePath"] = shader.virtualFilePath;
+    payload["cookedArtifactKey"] = shader.cookedArtifactKey;
 
     const std::string payloadText = payload.dump();
     const auto* const payloadBytes = reinterpret_cast<const std::byte*>(payloadText.data());

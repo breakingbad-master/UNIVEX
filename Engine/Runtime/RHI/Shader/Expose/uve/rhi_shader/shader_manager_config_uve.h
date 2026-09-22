@@ -30,7 +30,9 @@ struct ShaderManagerConfigUVE {
     /// preprocesses the authoring GLSL source. Missing artifacts are not fatal: the manager falls
     /// back to the existing source/embedded path, which keeps Null/OpenGL development builds
     /// usable when the optional artifact target was not built. The artifact mount is expected to
-    /// contain `<shader-stem>/<stage>/<stem>.<target>.<extension>` plus a per-stage manifest.
+    /// contain `<artifact-key>/<stage>/<shader-stem>.<target>.<extension>` plus a per-stage
+    /// manifest. Legacy descriptors with no artifact key use the shader filename stem as the key;
+    /// imported assets should persist a path-derived key to avoid same-name collisions.
     bool preferCookedArtifactsUVE = true;
 
     /// VFS prefix containing the cooked shader-artifact tree. EngineCoreUVE mounts the configured

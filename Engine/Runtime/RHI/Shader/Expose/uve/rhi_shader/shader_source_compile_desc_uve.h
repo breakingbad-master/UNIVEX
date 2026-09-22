@@ -20,6 +20,13 @@ namespace UVE::Render::Shader {
 struct ShaderSourceCompileDescUVE {
     ShaderStageUVE stage = ShaderStageUVE::Vertex;
     std::string virtualFilePath;
+
+    /// Optional relative identity below ShaderManagerConfigUVE::cookedArtifactMountPrefixUVE.
+    /// When empty, the manager retains the legacy source filename stem. Imported assets should
+    /// persist a path-derived key such as `materials/stone` so same-named shaders in different
+    /// directories cannot collide in the cooked tree.
+    std::string cookedArtifactKeyUVE;
+
     std::string embeddedFallbackSourceCode;
 
     /// Extra `#define NAME VALUE` pairs injected after the engine's own baseline block

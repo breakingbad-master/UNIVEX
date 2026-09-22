@@ -1212,9 +1212,22 @@ struct Renderer3DUVE::ImplUVE {
         const bool isCanonicalLitSource =
             vertexShaderAsset->sourceCode == Shader::BuiltIn::kLitShadowed3DSource &&
             fragmentShaderAsset->sourceCode == Shader::BuiltIn::kLitShadowed3DSource;
+        // Imported shader envelopes carry their own canonical VFS source paths. This is the
+        // generic material path: the manager can locate either the authoring file or the matching
+        // cooked artifact without a renderer-side filename convention. Keep the built-in
+        // recognition only as a backwards-compatible bridge for canonical assets authored before
+        // ShaderAssetUVE::virtualFilePath existed.
+        programDesc.vertexSource.virtualFilePath = vertexShaderAsset->virtualFilePath;
+        programDesc.vertexSource.cookedArtifactKeyUVE = vertexShaderAsset->cookedArtifactKey;
+        programDesc.fragmentSource.virtualFilePath = fragmentShaderAsset->virtualFilePath;
+        programDesc.fragmentSource.cookedArtifactKeyUVE = fragmentShaderAsset->cookedArtifactKey;
         if (isCanonicalLitSource) {
-            programDesc.vertexSource.virtualFilePath = std::string(Shader::BuiltIn::kLitShadowed3DVirtualPath);
-            programDesc.fragmentSource.virtualFilePath = std::string(Shader::BuiltIn::kLitShadowed3DVirtualPath);
+            if (programDesc.vertexSource.virtualFilePath.empty()) {
+                programDesc.vertexSource.virtualFilePath = std::string(Shader::BuiltIn::kLitShadowed3DVirtualPath);
+            }
+            if (programDesc.fragmentSource.virtualFilePath.empty()) {
+                programDesc.fragmentSource.virtualFilePath = std::string(Shader::BuiltIn::kLitShadowed3DVirtualPath);
+            }
         }
         programDesc.vertexSource.stage = ShaderStageUVE::Vertex;
         programDesc.vertexSource.embeddedFallbackSourceCode = vertexShaderAsset->sourceCode;
