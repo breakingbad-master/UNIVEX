@@ -282,6 +282,17 @@ struct EngineConfigUVE {
     /// documented Vulkan -> OpenGL -> Null fallback chain when the host lacks it. Appended
     /// last so existing aggregate-construction order in callers and tests is unchanged.
     RenderBackendPreferenceUVE renderBackendPreferenceUVE = RenderBackendPreferenceUVE::AutoUVE;
+
+    /// Optional offline shader-artifact mount. The CMake `uve_builtin_shader_artifacts` target
+    /// writes a tree rooted at `shaders/` in a normal build directory; mounting that directory at
+    /// `shaders/cooked` lets ShaderManagerUVE select a Vulkan SPIR-V or generated native text
+    /// artifact without changing the source-facing virtual path. A missing directory/artifact is
+    /// deliberately non-fatal and falls back to source compilation where the backend supports it.
+    /// Appended after the original configuration fields so existing aggregate initialization order
+    /// remains source-compatible.
+    bool shaderCookedArtifactsEnabledUVE = true;
+    std::string shaderArtifactMountPrefixUVE = "shaders/cooked";
+    std::filesystem::path shaderArtifactRealDirectoryUVE = "shaders/";
 };
 
 } // namespace UVE::Core

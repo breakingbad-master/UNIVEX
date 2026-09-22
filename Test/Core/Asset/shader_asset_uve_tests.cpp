@@ -30,6 +30,8 @@ namespace {
     shader.stage = ShaderStageKindUVE::Fragment;
     shader.sourceCode = "void main() { }";
     shader.entryPointName = "main";
+    shader.virtualFilePath = "materials/test.frag";
+    shader.cookedArtifactKey = "materials/test";
     return shader;
 }
 
@@ -45,7 +47,50 @@ TEST(ShaderAssetUVETest, SaveThenLoad_RoundTripsFieldExact) {
     EXPECT_EQ(loaded.stage, original.stage);
     EXPECT_EQ(loaded.sourceCode, original.sourceCode);
     EXPECT_EQ(loaded.entryPointName, original.entryPointName);
+    EXPECT_EQ(loaded.virtualFilePath, original.virtualFilePath);
+    EXPECT_EQ(loaded.cookedArtifactKey, original.cookedArtifactKey);
 
+    std::filesystem::remove(path);
+}
+
+TEST(ShaderAssetUVETest, LoadShaderAssetUVE_OldEnvelopeWithoutVirtualPath_RemainsCompatible) {
+    const std::filesystem::path path = "uve_shader_asset_tests_legacy_virtual_path.uveshader";
+    std::filesystem::remove(path);
+    const std::string payload =
+        R"({"stage":1,"sourceCode":"void main() { }","entryPointName":"main"})";
+    const auto* const payloadBytes = reinterpret_cast<const std::byte*>(payload.data());
+    ASSERT_TRUE(WriteUveFileUVE(
+        path, AssetKindUVE::Shader,
+        std::vector<std::byte>(payloadBytes, payloadBytes + payload.size())));
+
+    ShaderAssetUVE loaded;
+    ASSERT_TRUE(LoadShaderAssetUVE(path, loaded));
+    EXPECT_TRUE(loaded.virtualFilePath.empty());
+    std::filesystem::remove(path);
+}
+
+TEST(ShaderAssetUVETest, ShaderVirtualPathRejectsHostAndTraversalForms) {
+    EXPECT_TRUE(IsValidShaderVirtualFilePathUVE("materials/stone.frag"));
+    EXPECT_TRUE(IsValidShaderVirtualFilePathUVE(""));
+    EXPECT_FALSE(IsValidShaderVirtualFilePathUVE("/materials/stone.frag"));
+    EXPECT_FALSE(IsValidShaderVirtualFilePathUVE("materials\\stone.frag"));
+    EXPECT_FALSE(IsValidShaderVirtualFilePathUVE("materials/../stone.frag"));
+    EXPECT_FALSE(IsValidShaderVirtualFilePathUVE("C:/materials/stone.frag"));
+}
+
+TEST(ShaderAssetUVETest, SaveShaderAssetUVE_InvalidVirtualPathLeavesExistingEnvelopeUntouched) {
+    const std::filesystem::path path = "uve_shader_asset_tests_invalid_virtual_path.uveshader";
+    std::filesystem::remove(path);
+    const ShaderAssetUVE original = MakeTestShaderUVE();
+    ASSERT_TRUE(SaveShaderAssetUVE(original, path));
+
+    ShaderAssetUVE invalid = original;
+    invalid.virtualFilePath = "materials/../../escape.frag";
+    EXPECT_FALSE(SaveShaderAssetUVE(invalid, path));
+
+    ShaderAssetUVE loaded;
+    ASSERT_TRUE(LoadShaderAssetUVE(path, loaded));
+    EXPECT_EQ(loaded.virtualFilePath, original.virtualFilePath);
     std::filesystem::remove(path);
 }
 

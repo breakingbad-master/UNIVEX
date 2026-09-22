@@ -1,32 +1,119 @@
 #version 450 core
 
+#ifdef UVE_VULKAN
+#ifdef UVE_BINDLESS
+// UVE_BINDLESS_MATERIAL_CONTRACT: this shader opts into the native set-1 sampled-texture
+// array when the device advertises the optional descriptor-indexing tier. Low-tier devices use
+// the ordinary set-0 tuple descriptors below without changing the material source contract.
+#extension GL_EXT_nonuniform_qualifier : require
+#endif
+// Vulkan's frame/material values live in one std140 block so the renderer's existing named
+// SetUniform* calls update one dynamic-UBO shadow for both stages. The block deliberately keeps
+// the light array and cascade arrays: the Vulkan reflection layer flattens their members to the
+// same names used by the OpenGL path (uLights[0].type, uLightSpaceMatrices[0], ...).
+struct LightUVE {
+    int type; // 0 = Directional, 1 = Point, 2 = Spot
+    vec3 position;
+    vec3 direction;
+    vec3 color;
+    float intensity;
+    float range;
+    float spotAngleDegrees;
+};
+
+layout(std140, set = 0, binding = 3) uniform UveLitShadowedFrameParameters {
+    mat4 uViewProjection;
+    mat4 uLightSpaceMatrix;
+    mat4 uLightSpaceMatrices[3];
+    LightUVE uLights[4];
+    vec3 uAmbientColor;
+    vec3 uViewPosition;
+    vec3 uAlbedoColor;
+    float uMetallic;
+    float uRoughness;
+    vec3 uEmissiveColor;
+    int uShadowPcfKernelRadius;
+    float uShadowCascadeSplits[3];
+    int uShadowCascadeCount;
+    float uShadowCascadeBlendRatio;
+#ifdef UVE_BINDLESS
+    int uAlbedoTextureIndex;
+    int uNormalTextureIndex;
+    int uAOTextureIndex;
+#endif
+} uveFrameParameters;
+#define uViewProjection uveFrameParameters.uViewProjection
+#define uLightSpaceMatrix uveFrameParameters.uLightSpaceMatrix
+#define uLightSpaceMatrices uveFrameParameters.uLightSpaceMatrices
+#define uLights uveFrameParameters.uLights
+#define uAmbientColor uveFrameParameters.uAmbientColor
+#define uViewPosition uveFrameParameters.uViewPosition
+#define uAlbedoColor uveFrameParameters.uAlbedoColor
+#define uMetallic uveFrameParameters.uMetallic
+#define uRoughness uveFrameParameters.uRoughness
+#define uEmissiveColor uveFrameParameters.uEmissiveColor
+#define uShadowPcfKernelRadius uveFrameParameters.uShadowPcfKernelRadius
+#define uShadowCascadeSplits uveFrameParameters.uShadowCascadeSplits
+#define uShadowCascadeCount uveFrameParameters.uShadowCascadeCount
+#define uShadowCascadeBlendRatio uveFrameParameters.uShadowCascadeBlendRatio
+#ifdef UVE_BINDLESS
+#define uAlbedoTextureIndex uveFrameParameters.uAlbedoTextureIndex
+#define uNormalTextureIndex uveFrameParameters.uNormalTextureIndex
+#define uAOTextureIndex uveFrameParameters.uAOTextureIndex
+#endif
+
+#ifdef UVE_INSTANCED
+// The instance arrays are separate from the frame block so the same shader supports both the
+// per-object fallback and the batched path. Vulkan's contiguous reflected storage slots are
+// 0=model, 1=normal matrix, 2=base index; this matches renderer BindStorageBufferUVE calls.
+layout(std430, set = 0, binding = 0) readonly buffer InstanceTransformBlock {
+    mat4 instanceModels[];
+};
+layout(std430, set = 0, binding = 1) readonly buffer InstanceNormalTransformBlock {
+    mat4 instanceNormalModels[];
+};
+layout(std430, set = 0, binding = 2) readonly buffer InstanceBaseBlock {
+    int uInstanceBaseIndex;
+};
+#define UVE_LIT_INSTANCE_ID gl_InstanceIndex
+#else
+layout(std140, set = 0, binding = 0) uniform UveLitShadowedObjectParameters {
+    mat4 uModel;
+    mat4 uNormalMatrix;
+} uveObjectParameters;
+#define uModel uveObjectParameters.uModel
+#define uNormalMatrix uveObjectParameters.uNormalMatrix
+#endif
+
+// Material texture slots 0..2 and shadow slots 3..5 map to descriptor bindings 4..9. The
+// Vulkan path uses individual shadow samplers because this RHI's bounded tuple descriptor
+// fallback intentionally supports one descriptor per reflected binding, not descriptor arrays.
+#ifdef UVE_BINDLESS
+// Material images move to the native descriptor-indexed set. Shadow maps remain in set 0 so the
+// existing per-frame shadow lifecycle and sampler layout stay deterministic on every tier.
+layout(set = 1, binding = 0) uniform sampler2D uveMaterialTextures[256];
+#define UVE_BINDLESS_INDEX(index) nonuniformEXT(uint(index))
+#else
+layout(set = 0, binding = 4) uniform sampler2D uAlbedoTexture;
+layout(set = 0, binding = 5) uniform sampler2D uNormalTexture;
+layout(set = 0, binding = 6) uniform sampler2D uAOTexture;
+#endif
+layout(set = 0, binding = 7) uniform sampler2D uShadowMapTexture0;
+layout(set = 0, binding = 8) uniform sampler2D uShadowMapTexture1;
+layout(set = 0, binding = 9) uniform sampler2D uShadowMapTexture2;
+#define uShadowMapTexture uShadowMapTexture0
+#else
 #ifdef VERTEX_SHADER
-layout(location = 0) in vec3 aPosition;
-layout(location = 1) in vec3 aNormal;
-layout(location = 2) in vec2 aTexCoord;
-layout(location = 3) in vec4 aTangent;
-
-out vec3 vWorldPosition;
-out vec3 vWorldNormal;
-out vec3 vWorldTangent;
-out float vTangentHandedness;
-out vec2 vTexCoord;
-out vec4 vLightSpacePosition;
-out vec4 vLightSpacePositions[3];
-
 #ifdef UVE_INSTANCED
 // The instanced variant reads its per-object transforms from a storage buffer indexed by
 // gl_InstanceID instead of from a uniform set once per draw. That is the entire difference
 // between the two variants, and it is why this is a #define rather than a second shader file:
-// the 240-odd lines of lighting below are shared verbatim, so an instanced object and a
-// non-instanced one cannot drift apart in how they are lit.
+// the lighting below is shared verbatim, so an instanced object and a non-instanced one cannot
+// drift apart in how they are lit.
 //
 // Matrices arrive TRANSPOSED from the host (Matrix4x4UVE is row-major; std430 mat4 is
 // column-major), exactly as in mesh_skin.glsl - the same convention, deliberately, so there is
 // one rule to remember rather than two.
-//
-// uInstanceBaseIndex offsets into the frame-wide matrix buffer so every batch can share one
-// upload rather than one buffer each; gl_InstanceID restarts at 0 for each draw.
 layout(std430, binding = 0) readonly buffer InstanceTransformBlock {
     mat4 instanceModels[];
 };
@@ -36,6 +123,7 @@ layout(std430, binding = 1) readonly buffer InstanceNormalTransformBlock {
 layout(std430, binding = 2) readonly buffer InstanceBaseBlock {
     int uInstanceBaseIndex;
 };
+#define UVE_LIT_INSTANCE_ID gl_InstanceID
 #else
 uniform mat4 uModel;
 // Transpose(inverse(uModel)): correctly transforms normals under non-uniform scale, unlike
@@ -47,10 +135,61 @@ uniform mat4 uNormalMatrix;
 uniform mat4 uViewProjection;
 uniform mat4 uLightSpaceMatrix;
 uniform mat4 uLightSpaceMatrices[3];
+#else
+struct LightUVE {
+    int type; // 0 = Directional, 1 = Point, 2 = Spot
+    vec3 position;
+    vec3 direction;
+    vec3 color;
+    float intensity;
+    float range;
+    float spotAngleDegrees;
+};
+
+uniform LightUVE uLights[4];
+uniform vec3 uAmbientColor;
+uniform vec3 uViewPosition;
+uniform vec3 uAlbedoColor;
+uniform float uMetallic;
+uniform float uRoughness;
+uniform vec3 uEmissiveColor;
+// Legacy Increment 27 pair retained for project-authored shaders and direct single-map tests.
+uniform sampler2D uShadowMapTexture;
+uniform mat4 uLightSpaceMatrix;
+uniform int uShadowPcfKernelRadius;
+// Increment 30 fixed three-cascade directional shadow contract.
+uniform sampler2D uShadowMapTextures[3];
+uniform float uShadowCascadeSplits[3];
+uniform int uShadowCascadeCount;
+// Increment 31: fraction of each non-final cascade depth interval used to cross-fade into the next.
+uniform float uShadowCascadeBlendRatio;
+uniform sampler2D uAlbedoTexture;
+uniform sampler2D uNormalTexture;
+uniform sampler2D uAOTexture;
+#endif
+#endif
+
+#ifdef VERTEX_SHADER
+layout(location = 0) in vec3 aPosition;
+layout(location = 1) in vec3 aNormal;
+layout(location = 2) in vec2 aTexCoord;
+layout(location = 3) in vec4 aTangent;
+
+layout(location = 0) out vec3 vWorldPosition;
+layout(location = 1) out vec3 vWorldNormal;
+layout(location = 2) out vec3 vWorldTangent;
+layout(location = 3) out float vTangentHandedness;
+layout(location = 4) out vec2 vTexCoord;
+layout(location = 5) out vec4 vLightSpacePosition;
+layout(location = 6) out vec4 vLightSpacePositions[3];
 
 void main() {
 #ifdef UVE_INSTANCED
+#ifdef UVE_VULKAN
+    int instanceSlot = uInstanceBaseIndex + gl_InstanceIndex;
+#else
     int instanceSlot = uInstanceBaseIndex + gl_InstanceID;
+#endif
     mat4 model = instanceModels[instanceSlot];
     mat4 normalMatrix = instanceNormalModels[instanceSlot];
 #else
@@ -72,45 +211,19 @@ void main() {
 #endif
 
 #ifdef FRAGMENT_SHADER
-in vec3 vWorldPosition;
-in vec3 vWorldNormal;
-in vec3 vWorldTangent;
-in float vTangentHandedness;
-in vec2 vTexCoord;
-in vec4 vLightSpacePosition;
-in vec4 vLightSpacePositions[3];
-out vec4 FragColor;
+layout(location = 0) in vec3 vWorldPosition;
+layout(location = 1) in vec3 vWorldNormal;
+layout(location = 2) in vec3 vWorldTangent;
+layout(location = 3) in float vTangentHandedness;
+layout(location = 4) in vec2 vTexCoord;
+layout(location = 5) in vec4 vLightSpacePosition;
+layout(location = 6) in vec4 vLightSpacePositions[3];
+layout(location = 0) out vec4 FragColor;
 
-struct LightUVE {
-    int type; // 0 = Directional, 1 = Point, 2 = Spot
-    vec3 position;
-    vec3 direction;
-    vec3 color;
-    float intensity;
-    float range;
-    float spotAngleDegrees;
-};
-
-uniform LightUVE uLights[4];
-uniform vec3 uAmbientColor;
-uniform vec3 uViewPosition;
-uniform vec3 uAlbedoColor;
-uniform float uMetallic;
-uniform float uRoughness;
-uniform vec3 uEmissiveColor;
-uniform sampler2D uAlbedoTexture;
-uniform sampler2D uNormalTexture;
-uniform sampler2D uAOTexture;
-// Legacy Increment 27 pair retained for project-authored shaders and direct single-map tests.
-uniform sampler2D uShadowMapTexture;
-uniform mat4 uLightSpaceMatrix;
-uniform int uShadowPcfKernelRadius;
-// Increment 30 fixed three-cascade directional shadow contract.
-uniform sampler2D uShadowMapTextures[3];
-uniform float uShadowCascadeSplits[3];
-uniform int uShadowCascadeCount;
-// Increment 31: fraction of each non-final cascade depth interval used to cross-fade into the next.
-uniform float uShadowCascadeBlendRatio;
+#ifndef UVE_VULKAN
+// Vulkan declares the three cascade samplers individually above. The OpenGL fallback keeps the
+// historical array uniform and its runtime texture-unit contract unchanged.
+#endif
 
 const float kPiUVE = 3.14159265359;
 const float kBrdfEpsilonUVE = 0.0001;
@@ -147,6 +260,15 @@ vec3 FresnelSchlickUVE(float halfDotView, vec3 baseReflectance) {
 }
 
 float SampleCascadeDepthUVE(int cascadeIndex, vec2 texCoord) {
+#ifdef UVE_VULKAN
+    if (cascadeIndex == 0) {
+        return texture(uShadowMapTexture0, texCoord).r;
+    }
+    if (cascadeIndex == 1) {
+        return texture(uShadowMapTexture1, texCoord).r;
+    }
+    return texture(uShadowMapTexture2, texCoord).r;
+#else
     if (cascadeIndex == 0) {
         return texture(uShadowMapTextures[0], texCoord).r;
     }
@@ -154,9 +276,19 @@ float SampleCascadeDepthUVE(int cascadeIndex, vec2 texCoord) {
         return texture(uShadowMapTextures[1], texCoord).r;
     }
     return texture(uShadowMapTextures[2], texCoord).r;
+#endif
 }
 
 vec2 CascadeTexelSizeUVE(int cascadeIndex) {
+#ifdef UVE_VULKAN
+    if (cascadeIndex == 0) {
+        return 1.0 / vec2(textureSize(uShadowMapTexture0, 0));
+    }
+    if (cascadeIndex == 1) {
+        return 1.0 / vec2(textureSize(uShadowMapTexture1, 0));
+    }
+    return 1.0 / vec2(textureSize(uShadowMapTexture2, 0));
+#else
     if (cascadeIndex == 0) {
         return 1.0 / vec2(textureSize(uShadowMapTextures[0], 0));
     }
@@ -164,6 +296,7 @@ vec2 CascadeTexelSizeUVE(int cascadeIndex) {
         return 1.0 / vec2(textureSize(uShadowMapTextures[1], 0));
     }
     return 1.0 / vec2(textureSize(uShadowMapTextures[2], 0));
+#endif
 }
 
 vec4 CascadeLightSpacePositionUVE(int cascadeIndex) {
@@ -248,8 +381,13 @@ float DirectionalShadowFactorUVE(vec3 normal, vec3 lightDirection) {
 }
 
 void main() {
+#if defined(UVE_BINDLESS) && defined(UVE_VULKAN)
+    vec3 albedo = texture(uveMaterialTextures[UVE_BINDLESS_INDEX(uAlbedoTextureIndex)], vTexCoord).rgb * uAlbedoColor;
+    float ambientOcclusion = texture(uveMaterialTextures[UVE_BINDLESS_INDEX(uAOTextureIndex)], vTexCoord).r;
+#else
     vec3 albedo = texture(uAlbedoTexture, vTexCoord).rgb * uAlbedoColor;
     float ambientOcclusion = texture(uAOTexture, vTexCoord).r;
+#endif
     vec3 normal = SafeNormalizeUVE(vWorldNormal);
     vec3 tangent = vWorldTangent - normal * dot(normal, vWorldTangent);
     if (dot(tangent, tangent) <= 0.00000001) {
@@ -259,7 +397,11 @@ void main() {
     tangent = SafeNormalizeUVE(tangent);
     vec3 bitangent = SafeNormalizeUVE(cross(normal, tangent));
     bitangent *= vTangentHandedness < 0.0 ? -1.0 : 1.0;
+#if defined(UVE_BINDLESS) && defined(UVE_VULKAN)
+    vec3 tangentSpaceNormal = texture(uveMaterialTextures[UVE_BINDLESS_INDEX(uNormalTextureIndex)], vTexCoord).xyz * 2.0 - 1.0;
+#else
     vec3 tangentSpaceNormal = texture(uNormalTexture, vTexCoord).xyz * 2.0 - 1.0;
+#endif
     normal = SafeNormalizeUVE(mat3(tangent, bitangent, normal) * tangentSpaceNormal);
     vec3 viewDirection = SafeNormalizeUVE(uViewPosition - vWorldPosition);
     float metallic = clamp(uMetallic, 0.0, 1.0);

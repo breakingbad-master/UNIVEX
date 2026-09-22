@@ -13,14 +13,29 @@ namespace UVE::Render::Shader::BuiltIn {
 
 const std::string_view kBasic2DSource = R"GLSLSRC(#version 450 core
 
+// One authoring contract, two API layouts: the runtime OpenGL fallback keeps ordinary uniforms,
+// while offline Vulkan-family targets define UVE_VULKAN and bind the same values as push constants.
+// The member order is intentionally identical across both stages for one portable pipeline range.
+#ifdef UVE_VULKAN
+layout(push_constant) uniform UveBasic2DParameters {
+    mat4 uModel;
+    mat4 uProjection;
+    vec4 uColor;
+} uveParameters;
+#define uModel uveParameters.uModel
+#define uProjection uveParameters.uProjection
+#define uColor uveParameters.uColor
+#else
+uniform mat4 uModel;
+uniform mat4 uProjection;
+uniform vec4 uColor;
+#endif
+
 #ifdef VERTEX_SHADER
 layout(location = 0) in vec2 aPosition;
 layout(location = 1) in vec2 aTexCoord;
 
-out vec2 vTexCoord;
-
-uniform mat4 uModel;
-uniform mat4 uProjection;
+layout(location = 0) out vec2 vTexCoord;
 
 void main() {
     vTexCoord = aTexCoord;
@@ -29,10 +44,8 @@ void main() {
 #endif
 
 #ifdef FRAGMENT_SHADER
-in vec2 vTexCoord;
-out vec4 FragColor;
-
-uniform vec4 uColor;
+layout(location = 0) in vec2 vTexCoord;
+layout(location = 0) out vec4 FragColor;
 
 void main() {
     FragColor = uColor;
@@ -42,11 +55,26 @@ void main() {
 
 const std::string_view kBasic3DSource = R"GLSLSRC(#version 450 core
 
-#ifdef VERTEX_SHADER
-layout(location = 0) in vec3 aPosition;
-
+// One authoring contract, two API layouts: the runtime OpenGL fallback keeps ordinary uniforms,
+// while offline Vulkan-family targets define UVE_VULKAN and bind the same values as push constants.
+// The member order is intentionally identical across both stages for one portable pipeline range.
+#ifdef UVE_VULKAN
+layout(push_constant) uniform UveBasic3DParameters {
+    mat4 uModel;
+    mat4 uViewProjection;
+    vec3 uColor;
+} uveParameters;
+#define uModel uveParameters.uModel
+#define uViewProjection uveParameters.uViewProjection
+#define uColor uveParameters.uColor
+#else
 uniform mat4 uModel;
 uniform mat4 uViewProjection;
+uniform vec3 uColor;
+#endif
+
+#ifdef VERTEX_SHADER
+layout(location = 0) in vec3 aPosition;
 
 void main() {
     gl_Position = uViewProjection * uModel * vec4(aPosition, 1.0);
@@ -54,9 +82,7 @@ void main() {
 #endif
 
 #ifdef FRAGMENT_SHADER
-out vec4 FragColor;
-
-uniform vec3 uColor;
+layout(location = 0) out vec4 FragColor;
 
 void main() {
     FragColor = vec4(uColor, 1.0);
@@ -66,14 +92,23 @@ void main() {
 
 const std::string_view kBasic3DTexturedSource = R"GLSLSRC(#version 450 core
 
+#ifdef UVE_VULKAN
+layout(push_constant) uniform UveBasic3DTexturedParameters {
+    mat4 uModel;
+    mat4 uViewProjection;
+} uveParameters;
+#define uModel uveParameters.uModel
+#define uViewProjection uveParameters.uViewProjection
+#else
+uniform mat4 uModel;
+uniform mat4 uViewProjection;
+#endif
+
 #ifdef VERTEX_SHADER
 layout(location = 0) in vec3 aPosition;
 layout(location = 1) in vec2 aTexCoord;
 
-out vec2 vTexCoord;
-
-uniform mat4 uModel;
-uniform mat4 uViewProjection;
+layout(location = 0) out vec2 vTexCoord;
 
 void main() {
     vTexCoord = aTexCoord;
@@ -82,12 +117,16 @@ void main() {
 #endif
 
 #ifdef FRAGMENT_SHADER
-in vec2 vTexCoord;
-out vec4 FragColor;
+layout(location = 0) in vec2 vTexCoord;
+layout(location = 0) out vec4 FragColor;
 
 // Placeholder only - no CreateTextureUVE-backed binding exists yet this increment
 // (MaterialSystemUVE, a future increment, is what actually binds a real texture here).
+#ifdef UVE_VULKAN
+layout(set = 0, binding = 0) uniform sampler2D uTexture;
+#else
 uniform sampler2D uTexture;
+#endif
 
 void main() {
     FragColor = texture(uTexture, vTexCoord);
@@ -99,7 +138,13 @@ const std::string_view kFullscreenQuadSource = R"GLSLSRC(#version 450 core
 
 #ifdef VERTEX_SHADER
 // Fullscreen triangle via the vertex-ID trick: no vertex buffer is required.
-out vec2 vTexCoord;
+layout(location = 0) out vec2 vTexCoord;
+
+#ifdef UVE_VULKAN
+#define UVE_FULLSCREEN_VERTEX_ID gl_VertexIndex
+#else
+#define UVE_FULLSCREEN_VERTEX_ID gl_VertexID
+#endif
 
 void main() {
     // position is (0,0), (2,0), (0,2) - the oversized triangle that covers clip space once
@@ -107,16 +152,26 @@ void main() {
     // that same mapping, (ndc+1)/2 == position, so the visible NDC range [-1,1] samples the
     // full [0,1] of the source. Halving it here would sample only the source's lower-left
     // quarter and magnify it across the whole target.
-    vec2 position = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+    vec2 position = vec2((UVE_FULLSCREEN_VERTEX_ID << 1) & 2, UVE_FULLSCREEN_VERTEX_ID & 2);
     vTexCoord = position;
     gl_Position = vec4(position * 2.0 - 1.0, 0.0, 1.0);
 }
 #endif
 
 #ifdef FRAGMENT_SHADER
-in vec2 vTexCoord;
-out vec4 FragColor;
+layout(location = 0) in vec2 vTexCoord;
+layout(location = 0) out vec4 FragColor;
 
+#ifdef UVE_VULKAN
+layout(set = 0, binding = 0) uniform sampler2D uSourceTexture;
+layout(set = 0, binding = 1) uniform sampler2D uSceneDepthTexture;
+// 1 while rendering into a caller-supplied texture, 0 for the presentation surface - whose
+// alpha must stay opaque, since some window visuals composite it.
+layout(push_constant) uniform UveFullscreenQuadParameters {
+    int uWriteCoverageAlpha;
+} uveParameters;
+#define uWriteCoverageAlpha uveParameters.uWriteCoverageAlpha
+#else
 uniform sampler2D uSourceTexture;
 // The scene depth this frame was rendered with, used only to report coverage. A caller that
 // renders into its own texture (RenderFrameToTargetUVE) otherwise has no way to tell which
@@ -127,6 +182,7 @@ uniform sampler2D uSceneDepthTexture;
 // 1 while rendering into a caller-supplied texture, 0 for the presentation surface - whose
 // alpha must stay opaque, since some window visuals composite it.
 uniform int uWriteCoverageAlpha;
+#endif
 
 vec3 AcesToneMapUVE(vec3 color) {
     const float a = 2.51;
@@ -148,9 +204,32 @@ void main() {
 
 const std::string_view kShadowDepthSource = R"GLSLSRC(#version 450 core
 
-#ifdef VERTEX_SHADER
-layout(location = 0) in vec3 aPosition;
-
+#ifdef UVE_VULKAN
+#ifdef UVE_INSTANCED
+// Vulkan uses contiguous reflected storage slots: renderer slot 0 is the model array and
+// renderer slot 1 is the base-index scalar. The OpenGL fallback retains its historical sparse
+// declarations below; its RHI maps the same logical slots to the reflected physical binding
+// points before glBindBufferBase.
+layout(std430, set = 0, binding = 0) readonly buffer InstanceTransformBlock {
+    mat4 instanceModels[];
+};
+layout(std430, set = 0, binding = 1) readonly buffer InstanceBaseBlock {
+    int uInstanceBaseIndex;
+};
+layout(std140, set = 0, binding = 3) uniform UveShadowDepthFrameParameters {
+    mat4 uLightSpaceMatrix;
+} uveFrameParameters;
+#define uLightSpaceMatrix uveFrameParameters.uLightSpaceMatrix
+#define UVE_SHADOW_INSTANCE_ID gl_InstanceIndex
+#else
+layout(std140, set = 0, binding = 0) uniform UveShadowDepthParameters {
+    mat4 uModel;
+    mat4 uLightSpaceMatrix;
+} uveParameters;
+#define uModel uveParameters.uModel
+#define uLightSpaceMatrix uveParameters.uLightSpaceMatrix
+#endif
+#else
 #ifdef UVE_INSTANCED
 // The instanced shadow variant, mirroring lit_shadowed_3d.glsl's arrangement: same define name,
 // same binding 0, same transposed upload convention, same uInstanceBaseIndex + gl_InstanceID
@@ -165,14 +244,19 @@ layout(std430, binding = 0) readonly buffer InstanceTransformBlock {
 layout(std430, binding = 2) readonly buffer InstanceBaseBlock {
     int uInstanceBaseIndex;
 };
+#define UVE_SHADOW_INSTANCE_ID gl_InstanceID
 #else
 uniform mat4 uModel;
 #endif
 uniform mat4 uLightSpaceMatrix;
+#endif
+
+#ifdef VERTEX_SHADER
+layout(location = 0) in vec3 aPosition;
 
 void main() {
 #ifdef UVE_INSTANCED
-    mat4 model = instanceModels[uInstanceBaseIndex + gl_InstanceID];
+    mat4 model = instanceModels[uInstanceBaseIndex + UVE_SHADOW_INSTANCE_ID];
 #else
     mat4 model = uModel;
 #endif
@@ -189,33 +273,120 @@ void main() {
 
 const std::string_view kLitShadowed3DSource = R"GLSLSRC(#version 450 core
 
+#ifdef UVE_VULKAN
+#ifdef UVE_BINDLESS
+// UVE_BINDLESS_MATERIAL_CONTRACT: this shader opts into the native set-1 sampled-texture
+// array when the device advertises the optional descriptor-indexing tier. Low-tier devices use
+// the ordinary set-0 tuple descriptors below without changing the material source contract.
+#extension GL_EXT_nonuniform_qualifier : require
+#endif
+// Vulkan's frame/material values live in one std140 block so the renderer's existing named
+// SetUniform* calls update one dynamic-UBO shadow for both stages. The block deliberately keeps
+// the light array and cascade arrays: the Vulkan reflection layer flattens their members to the
+// same names used by the OpenGL path (uLights[0].type, uLightSpaceMatrices[0], ...).
+struct LightUVE {
+    int type; // 0 = Directional, 1 = Point, 2 = Spot
+    vec3 position;
+    vec3 direction;
+    vec3 color;
+    float intensity;
+    float range;
+    float spotAngleDegrees;
+};
+
+layout(std140, set = 0, binding = 3) uniform UveLitShadowedFrameParameters {
+    mat4 uViewProjection;
+    mat4 uLightSpaceMatrix;
+    mat4 uLightSpaceMatrices[3];
+    LightUVE uLights[4];
+    vec3 uAmbientColor;
+    vec3 uViewPosition;
+    vec3 uAlbedoColor;
+    float uMetallic;
+    float uRoughness;
+    vec3 uEmissiveColor;
+    int uShadowPcfKernelRadius;
+    float uShadowCascadeSplits[3];
+    int uShadowCascadeCount;
+    float uShadowCascadeBlendRatio;
+#ifdef UVE_BINDLESS
+    int uAlbedoTextureIndex;
+    int uNormalTextureIndex;
+    int uAOTextureIndex;
+#endif
+} uveFrameParameters;
+#define uViewProjection uveFrameParameters.uViewProjection
+#define uLightSpaceMatrix uveFrameParameters.uLightSpaceMatrix
+#define uLightSpaceMatrices uveFrameParameters.uLightSpaceMatrices
+#define uLights uveFrameParameters.uLights
+#define uAmbientColor uveFrameParameters.uAmbientColor
+#define uViewPosition uveFrameParameters.uViewPosition
+#define uAlbedoColor uveFrameParameters.uAlbedoColor
+#define uMetallic uveFrameParameters.uMetallic
+#define uRoughness uveFrameParameters.uRoughness
+#define uEmissiveColor uveFrameParameters.uEmissiveColor
+#define uShadowPcfKernelRadius uveFrameParameters.uShadowPcfKernelRadius
+#define uShadowCascadeSplits uveFrameParameters.uShadowCascadeSplits
+#define uShadowCascadeCount uveFrameParameters.uShadowCascadeCount
+#define uShadowCascadeBlendRatio uveFrameParameters.uShadowCascadeBlendRatio
+#ifdef UVE_BINDLESS
+#define uAlbedoTextureIndex uveFrameParameters.uAlbedoTextureIndex
+#define uNormalTextureIndex uveFrameParameters.uNormalTextureIndex
+#define uAOTextureIndex uveFrameParameters.uAOTextureIndex
+#endif
+
+#ifdef UVE_INSTANCED
+// The instance arrays are separate from the frame block so the same shader supports both the
+// per-object fallback and the batched path. Vulkan's contiguous reflected storage slots are
+// 0=model, 1=normal matrix, 2=base index; this matches renderer BindStorageBufferUVE calls.
+layout(std430, set = 0, binding = 0) readonly buffer InstanceTransformBlock {
+    mat4 instanceModels[];
+};
+layout(std430, set = 0, binding = 1) readonly buffer InstanceNormalTransformBlock {
+    mat4 instanceNormalModels[];
+};
+layout(std430, set = 0, binding = 2) readonly buffer InstanceBaseBlock {
+    int uInstanceBaseIndex;
+};
+#define UVE_LIT_INSTANCE_ID gl_InstanceIndex
+#else
+layout(std140, set = 0, binding = 0) uniform UveLitShadowedObjectParameters {
+    mat4 uModel;
+    mat4 uNormalMatrix;
+} uveObjectParameters;
+#define uModel uveObjectParameters.uModel
+#define uNormalMatrix uveObjectParameters.uNormalMatrix
+#endif
+
+// Material texture slots 0..2 and shadow slots 3..5 map to descriptor bindings 4..9. The
+// Vulkan path uses individual shadow samplers because this RHI's bounded tuple descriptor
+// fallback intentionally supports one descriptor per reflected binding, not descriptor arrays.
+#ifdef UVE_BINDLESS
+// Material images move to the native descriptor-indexed set. Shadow maps remain in set 0 so the
+// existing per-frame shadow lifecycle and sampler layout stay deterministic on every tier.
+layout(set = 1, binding = 0) uniform sampler2D uveMaterialTextures[256];
+#define UVE_BINDLESS_INDEX(index) nonuniformEXT(uint(index))
+#else
+layout(set = 0, binding = 4) uniform sampler2D uAlbedoTexture;
+layout(set = 0, binding = 5) uniform sampler2D uNormalTexture;
+layout(set = 0, binding = 6) uniform sampler2D uAOTexture;
+#endif
+layout(set = 0, binding = 7) uniform sampler2D uShadowMapTexture0;
+layout(set = 0, binding = 8) uniform sampler2D uShadowMapTexture1;
+layout(set = 0, binding = 9) uniform sampler2D uShadowMapTexture2;
+#define uShadowMapTexture uShadowMapTexture0
+#else
 #ifdef VERTEX_SHADER
-layout(location = 0) in vec3 aPosition;
-layout(location = 1) in vec3 aNormal;
-layout(location = 2) in vec2 aTexCoord;
-layout(location = 3) in vec4 aTangent;
-
-out vec3 vWorldPosition;
-out vec3 vWorldNormal;
-out vec3 vWorldTangent;
-out float vTangentHandedness;
-out vec2 vTexCoord;
-out vec4 vLightSpacePosition;
-out vec4 vLightSpacePositions[3];
-
 #ifdef UVE_INSTANCED
 // The instanced variant reads its per-object transforms from a storage buffer indexed by
 // gl_InstanceID instead of from a uniform set once per draw. That is the entire difference
 // between the two variants, and it is why this is a #define rather than a second shader file:
-// the 240-odd lines of lighting below are shared verbatim, so an instanced object and a
-// non-instanced one cannot drift apart in how they are lit.
+// the lighting below is shared verbatim, so an instanced object and a non-instanced one cannot
+// drift apart in how they are lit.
 //
 // Matrices arrive TRANSPOSED from the host (Matrix4x4UVE is row-major; std430 mat4 is
 // column-major), exactly as in mesh_skin.glsl - the same convention, deliberately, so there is
 // one rule to remember rather than two.
-//
-// uInstanceBaseIndex offsets into the frame-wide matrix buffer so every batch can share one
-// upload rather than one buffer each; gl_InstanceID restarts at 0 for each draw.
 layout(std430, binding = 0) readonly buffer InstanceTransformBlock {
     mat4 instanceModels[];
 };
@@ -225,6 +396,7 @@ layout(std430, binding = 1) readonly buffer InstanceNormalTransformBlock {
 layout(std430, binding = 2) readonly buffer InstanceBaseBlock {
     int uInstanceBaseIndex;
 };
+#define UVE_LIT_INSTANCE_ID gl_InstanceID
 #else
 uniform mat4 uModel;
 // Transpose(inverse(uModel)): correctly transforms normals under non-uniform scale, unlike
@@ -236,10 +408,61 @@ uniform mat4 uNormalMatrix;
 uniform mat4 uViewProjection;
 uniform mat4 uLightSpaceMatrix;
 uniform mat4 uLightSpaceMatrices[3];
+#else
+struct LightUVE {
+    int type; // 0 = Directional, 1 = Point, 2 = Spot
+    vec3 position;
+    vec3 direction;
+    vec3 color;
+    float intensity;
+    float range;
+    float spotAngleDegrees;
+};
+
+uniform LightUVE uLights[4];
+uniform vec3 uAmbientColor;
+uniform vec3 uViewPosition;
+uniform vec3 uAlbedoColor;
+uniform float uMetallic;
+uniform float uRoughness;
+uniform vec3 uEmissiveColor;
+// Legacy Increment 27 pair retained for project-authored shaders and direct single-map tests.
+uniform sampler2D uShadowMapTexture;
+uniform mat4 uLightSpaceMatrix;
+uniform int uShadowPcfKernelRadius;
+// Increment 30 fixed three-cascade directional shadow contract.
+uniform sampler2D uShadowMapTextures[3];
+uniform float uShadowCascadeSplits[3];
+uniform int uShadowCascadeCount;
+// Increment 31: fraction of each non-final cascade depth interval used to cross-fade into the next.
+uniform float uShadowCascadeBlendRatio;
+uniform sampler2D uAlbedoTexture;
+uniform sampler2D uNormalTexture;
+uniform sampler2D uAOTexture;
+#endif
+#endif
+
+#ifdef VERTEX_SHADER
+layout(location = 0) in vec3 aPosition;
+layout(location = 1) in vec3 aNormal;
+layout(location = 2) in vec2 aTexCoord;
+layout(location = 3) in vec4 aTangent;
+
+layout(location = 0) out vec3 vWorldPosition;
+layout(location = 1) out vec3 vWorldNormal;
+layout(location = 2) out vec3 vWorldTangent;
+layout(location = 3) out float vTangentHandedness;
+layout(location = 4) out vec2 vTexCoord;
+layout(location = 5) out vec4 vLightSpacePosition;
+layout(location = 6) out vec4 vLightSpacePositions[3];
 
 void main() {
 #ifdef UVE_INSTANCED
+#ifdef UVE_VULKAN
+    int instanceSlot = uInstanceBaseIndex + gl_InstanceIndex;
+#else
     int instanceSlot = uInstanceBaseIndex + gl_InstanceID;
+#endif
     mat4 model = instanceModels[instanceSlot];
     mat4 normalMatrix = instanceNormalModels[instanceSlot];
 #else
@@ -261,45 +484,19 @@ void main() {
 #endif
 
 #ifdef FRAGMENT_SHADER
-in vec3 vWorldPosition;
-in vec3 vWorldNormal;
-in vec3 vWorldTangent;
-in float vTangentHandedness;
-in vec2 vTexCoord;
-in vec4 vLightSpacePosition;
-in vec4 vLightSpacePositions[3];
-out vec4 FragColor;
+layout(location = 0) in vec3 vWorldPosition;
+layout(location = 1) in vec3 vWorldNormal;
+layout(location = 2) in vec3 vWorldTangent;
+layout(location = 3) in float vTangentHandedness;
+layout(location = 4) in vec2 vTexCoord;
+layout(location = 5) in vec4 vLightSpacePosition;
+layout(location = 6) in vec4 vLightSpacePositions[3];
+layout(location = 0) out vec4 FragColor;
 
-struct LightUVE {
-    int type; // 0 = Directional, 1 = Point, 2 = Spot
-    vec3 position;
-    vec3 direction;
-    vec3 color;
-    float intensity;
-    float range;
-    float spotAngleDegrees;
-};
-
-uniform LightUVE uLights[4];
-uniform vec3 uAmbientColor;
-uniform vec3 uViewPosition;
-uniform vec3 uAlbedoColor;
-uniform float uMetallic;
-uniform float uRoughness;
-uniform vec3 uEmissiveColor;
-uniform sampler2D uAlbedoTexture;
-uniform sampler2D uNormalTexture;
-uniform sampler2D uAOTexture;
-// Legacy Increment 27 pair retained for project-authored shaders and direct single-map tests.
-uniform sampler2D uShadowMapTexture;
-uniform mat4 uLightSpaceMatrix;
-uniform int uShadowPcfKernelRadius;
-// Increment 30 fixed three-cascade directional shadow contract.
-uniform sampler2D uShadowMapTextures[3];
-uniform float uShadowCascadeSplits[3];
-uniform int uShadowCascadeCount;
-// Increment 31: fraction of each non-final cascade depth interval used to cross-fade into the next.
-uniform float uShadowCascadeBlendRatio;
+#ifndef UVE_VULKAN
+// Vulkan declares the three cascade samplers individually above. The OpenGL fallback keeps the
+// historical array uniform and its runtime texture-unit contract unchanged.
+#endif
 
 const float kPiUVE = 3.14159265359;
 const float kBrdfEpsilonUVE = 0.0001;
@@ -336,6 +533,15 @@ vec3 FresnelSchlickUVE(float halfDotView, vec3 baseReflectance) {
 }
 
 float SampleCascadeDepthUVE(int cascadeIndex, vec2 texCoord) {
+#ifdef UVE_VULKAN
+    if (cascadeIndex == 0) {
+        return texture(uShadowMapTexture0, texCoord).r;
+    }
+    if (cascadeIndex == 1) {
+        return texture(uShadowMapTexture1, texCoord).r;
+    }
+    return texture(uShadowMapTexture2, texCoord).r;
+#else
     if (cascadeIndex == 0) {
         return texture(uShadowMapTextures[0], texCoord).r;
     }
@@ -343,9 +549,19 @@ float SampleCascadeDepthUVE(int cascadeIndex, vec2 texCoord) {
         return texture(uShadowMapTextures[1], texCoord).r;
     }
     return texture(uShadowMapTextures[2], texCoord).r;
+#endif
 }
 
 vec2 CascadeTexelSizeUVE(int cascadeIndex) {
+#ifdef UVE_VULKAN
+    if (cascadeIndex == 0) {
+        return 1.0 / vec2(textureSize(uShadowMapTexture0, 0));
+    }
+    if (cascadeIndex == 1) {
+        return 1.0 / vec2(textureSize(uShadowMapTexture1, 0));
+    }
+    return 1.0 / vec2(textureSize(uShadowMapTexture2, 0));
+#else
     if (cascadeIndex == 0) {
         return 1.0 / vec2(textureSize(uShadowMapTextures[0], 0));
     }
@@ -353,6 +569,7 @@ vec2 CascadeTexelSizeUVE(int cascadeIndex) {
         return 1.0 / vec2(textureSize(uShadowMapTextures[1], 0));
     }
     return 1.0 / vec2(textureSize(uShadowMapTextures[2], 0));
+#endif
 }
 
 vec4 CascadeLightSpacePositionUVE(int cascadeIndex) {
@@ -437,8 +654,13 @@ float DirectionalShadowFactorUVE(vec3 normal, vec3 lightDirection) {
 }
 
 void main() {
+#if defined(UVE_BINDLESS) && defined(UVE_VULKAN)
+    vec3 albedo = texture(uveMaterialTextures[UVE_BINDLESS_INDEX(uAlbedoTextureIndex)], vTexCoord).rgb * uAlbedoColor;
+    float ambientOcclusion = texture(uveMaterialTextures[UVE_BINDLESS_INDEX(uAOTextureIndex)], vTexCoord).r;
+#else
     vec3 albedo = texture(uAlbedoTexture, vTexCoord).rgb * uAlbedoColor;
     float ambientOcclusion = texture(uAOTexture, vTexCoord).r;
+#endif
     vec3 normal = SafeNormalizeUVE(vWorldNormal);
     vec3 tangent = vWorldTangent - normal * dot(normal, vWorldTangent);
     if (dot(tangent, tangent) <= 0.00000001) {
@@ -448,7 +670,11 @@ void main() {
     tangent = SafeNormalizeUVE(tangent);
     vec3 bitangent = SafeNormalizeUVE(cross(normal, tangent));
     bitangent *= vTangentHandedness < 0.0 ? -1.0 : 1.0;
+#if defined(UVE_BINDLESS) && defined(UVE_VULKAN)
+    vec3 tangentSpaceNormal = texture(uveMaterialTextures[UVE_BINDLESS_INDEX(uNormalTextureIndex)], vTexCoord).xyz * 2.0 - 1.0;
+#else
     vec3 tangentSpaceNormal = texture(uNormalTexture, vTexCoord).xyz * 2.0 - 1.0;
+#endif
     normal = SafeNormalizeUVE(mat3(tangent, bitangent, normal) * tangentSpaceNormal);
     vec3 viewDirection = SafeNormalizeUVE(uViewPosition - vWorldPosition);
     float metallic = clamp(uMetallic, 0.0, 1.0);
@@ -556,13 +782,23 @@ void main() {
 
 const std::string_view kParticleSource = R"GLSLSRC(#version 450 core
 
+// The particle material shares one authoring source across OpenGL and explicit APIs. OpenGL uses
+// its existing default-block matrix; the Vulkan-family cooked variants use a push constant with
+// the same member name and layout so ShaderProgramUVE::SetMatrix4x4UVE remains backend-neutral.
+#ifdef UVE_VULKAN
+layout(push_constant) uniform UveParticleParameters {
+    mat4 uViewProjection;
+} uveParameters;
+#define uViewProjection uveParameters.uViewProjection
+#else
+uniform mat4 uViewProjection;
+#endif
+
 #ifdef VERTEX_SHADER
 layout(location = 0) in vec3 aPosition;
 layout(location = 1) in vec4 aColor;
 
-out vec4 vColor;
-
-uniform mat4 uViewProjection;
+layout(location = 0) out vec4 vColor;
 
 void main() {
     vColor = aColor;
@@ -571,9 +807,9 @@ void main() {
 #endif
 
 #ifdef FRAGMENT_SHADER
-in vec4 vColor;
+layout(location = 0) in vec4 vColor;
 
-out vec4 FragColor;
+layout(location = 0) out vec4 FragColor;
 
 void main() {
     FragColor = vColor;
@@ -1157,9 +1393,24 @@ void main() {
 
 const std::string_view kBloomBrightPassSource = R"GLSLSRC(#version 450 core
 
+#ifdef UVE_VULKAN
+layout(push_constant) uniform UveBloomBrightParameters {
+    float uBloomThreshold;
+} uveParameters;
+#define uBloomThreshold uveParameters.uBloomThreshold
+#else
+uniform float uBloomThreshold;
+#endif
+
 #ifdef VERTEX_SHADER
 // Fullscreen triangle via the vertex-ID trick: no vertex buffer is required.
-out vec2 vTexCoord;
+layout(location = 0) out vec2 vTexCoord;
+
+#ifdef UVE_VULKAN
+#define UVE_FULLSCREEN_VERTEX_ID gl_VertexIndex
+#else
+#define UVE_FULLSCREEN_VERTEX_ID gl_VertexID
+#endif
 
 void main() {
     // position is (0,0), (2,0), (0,2) - the oversized triangle that covers clip space once
@@ -1167,18 +1418,21 @@ void main() {
     // that same mapping, (ndc+1)/2 == position, so the visible NDC range [-1,1] samples the
     // full [0,1] of the source. Halving it here would sample only the source's lower-left
     // quarter and magnify it across the whole target.
-    vec2 position = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+    vec2 position = vec2((UVE_FULLSCREEN_VERTEX_ID << 1) & 2, UVE_FULLSCREEN_VERTEX_ID & 2);
     vTexCoord = position;
     gl_Position = vec4(position * 2.0 - 1.0, 0.0, 1.0);
 }
 #endif
 
 #ifdef FRAGMENT_SHADER
-in vec2 vTexCoord;
-out vec4 FragColor;
+layout(location = 0) in vec2 vTexCoord;
+layout(location = 0) out vec4 FragColor;
 
+#ifdef UVE_VULKAN
+layout(set = 0, binding = 0) uniform sampler2D uSourceTexture;
+#else
 uniform sampler2D uSourceTexture;
-uniform float uBloomThreshold;
+#endif
 
 void main() {
     vec3 hdrColor = max(texture(uSourceTexture, vTexCoord).rgb, vec3(0.0));
@@ -1191,9 +1445,33 @@ void main() {
 
 const std::string_view kBloomBlurSource = R"GLSLSRC(#version 450 core
 
+#ifdef UVE_VULKAN
+layout(push_constant) uniform UveBloomBlurParameters {
+    float uBlurDirectionX;
+    float uBlurDirectionY;
+    float uTexelSizeX;
+    float uTexelSizeY;
+} uveParameters;
+#define uBlurDirectionX uveParameters.uBlurDirectionX
+#define uBlurDirectionY uveParameters.uBlurDirectionY
+#define uTexelSizeX uveParameters.uTexelSizeX
+#define uTexelSizeY uveParameters.uTexelSizeY
+#else
+uniform float uBlurDirectionX;
+uniform float uBlurDirectionY;
+uniform float uTexelSizeX;
+uniform float uTexelSizeY;
+#endif
+
 #ifdef VERTEX_SHADER
 // Fullscreen triangle via the vertex-ID trick: no vertex buffer is required.
-out vec2 vTexCoord;
+layout(location = 0) out vec2 vTexCoord;
+
+#ifdef UVE_VULKAN
+#define UVE_FULLSCREEN_VERTEX_ID gl_VertexIndex
+#else
+#define UVE_FULLSCREEN_VERTEX_ID gl_VertexID
+#endif
 
 void main() {
     // position is (0,0), (2,0), (0,2) - the oversized triangle that covers clip space once
@@ -1201,26 +1479,26 @@ void main() {
     // that same mapping, (ndc+1)/2 == position, so the visible NDC range [-1,1] samples the
     // full [0,1] of the source. Halving it here would sample only the source's lower-left
     // quarter and magnify it across the whole target.
-    vec2 position = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+    vec2 position = vec2((UVE_FULLSCREEN_VERTEX_ID << 1) & 2, UVE_FULLSCREEN_VERTEX_ID & 2);
     vTexCoord = position;
     gl_Position = vec4(position * 2.0 - 1.0, 0.0, 1.0);
 }
 #endif
 
 #ifdef FRAGMENT_SHADER
-in vec2 vTexCoord;
-out vec4 FragColor;
+layout(location = 0) in vec2 vTexCoord;
+layout(location = 0) out vec4 FragColor;
 
+#ifdef UVE_VULKAN
+layout(set = 0, binding = 0) uniform sampler2D uSourceTexture;
+#else
 uniform sampler2D uSourceTexture;
+#endif
 // (1,0) for a horizontal pass, (0,1) for a vertical pass - the same shader serves both halves of
 // the separable Gaussian blur, one draw each, ping-ponging between two same-sized targets.
 // Individual floats, not a vec2: ShaderProgramUVE currently only exposes Float/Int/Bool/Vec3/Mat4
 // uniform setters (see shader_program_uve.h), so this avoids adding a new uniform-value type for
 // a single consumer.
-uniform float uBlurDirectionX;
-uniform float uBlurDirectionY;
-uniform float uTexelSizeX;
-uniform float uTexelSizeY;
 
 void main() {
     // 9-tap Gaussian, weights normalized to sum to 1 (sigma ~= 2 texels).
@@ -1242,7 +1520,13 @@ const std::string_view kFullscreenCopySource = R"GLSLSRC(#version 450 core
 
 #ifdef VERTEX_SHADER
 // Fullscreen triangle via the vertex-ID trick: no vertex buffer is required.
-out vec2 vTexCoord;
+layout(location = 0) out vec2 vTexCoord;
+
+#ifdef UVE_VULKAN
+#define UVE_FULLSCREEN_VERTEX_ID gl_VertexIndex
+#else
+#define UVE_FULLSCREEN_VERTEX_ID gl_VertexID
+#endif
 
 void main() {
     // position is (0,0), (2,0), (0,2) - the oversized triangle that covers clip space once
@@ -1250,20 +1534,24 @@ void main() {
     // that same mapping, (ndc+1)/2 == position, so the visible NDC range [-1,1] samples the
     // full [0,1] of the source. Halving it here would sample only the source's lower-left
     // quarter and magnify it across the whole target.
-    vec2 position = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+    vec2 position = vec2((UVE_FULLSCREEN_VERTEX_ID << 1) & 2, UVE_FULLSCREEN_VERTEX_ID & 2);
     vTexCoord = position;
     gl_Position = vec4(position * 2.0 - 1.0, 0.0, 1.0);
 }
 #endif
 
 #ifdef FRAGMENT_SHADER
-in vec2 vTexCoord;
-out vec4 FragColor;
+layout(location = 0) in vec2 vTexCoord;
+layout(location = 0) out vec4 FragColor;
 
 // Unmodified passthrough: the actual effect is the pipeline's blend mode this shader is used
 // with, not anything computed here - Additive to composite the blurred bloom texture onto the
 // HDR scene color, Multiply to composite the SSAO occlusion term onto it.
+#ifdef UVE_VULKAN
+layout(set = 0, binding = 0) uniform sampler2D uSourceTexture;
+#else
 uniform sampler2D uSourceTexture;
+#endif
 
 void main() {
     FragColor = texture(uSourceTexture, vTexCoord);
@@ -1273,9 +1561,36 @@ void main() {
 
 const std::string_view kSsaoSource = R"GLSLSRC(#version 450 core
 
+#ifdef UVE_VULKAN
+layout(push_constant) uniform UveSsaoParameters {
+    mat4 uInverseProjection;
+    mat4 uProjection;
+    float uRadius;
+    float uBias;
+    float uIntensity;
+} uveParameters;
+#define uInverseProjection uveParameters.uInverseProjection
+#define uProjection uveParameters.uProjection
+#define uRadius uveParameters.uRadius
+#define uBias uveParameters.uBias
+#define uIntensity uveParameters.uIntensity
+#else
+uniform mat4 uInverseProjection;
+uniform mat4 uProjection;
+uniform float uRadius;
+uniform float uBias;
+uniform float uIntensity;
+#endif
+
 #ifdef VERTEX_SHADER
 // Fullscreen triangle via the vertex-ID trick: no vertex buffer is required.
-out vec2 vTexCoord;
+layout(location = 0) out vec2 vTexCoord;
+
+#ifdef UVE_VULKAN
+#define UVE_FULLSCREEN_VERTEX_ID gl_VertexIndex
+#else
+#define UVE_FULLSCREEN_VERTEX_ID gl_VertexID
+#endif
 
 void main() {
     // position is (0,0), (2,0), (0,2) - the oversized triangle that covers clip space once
@@ -1283,27 +1598,26 @@ void main() {
     // that same mapping, (ndc+1)/2 == position, so the visible NDC range [-1,1] samples the
     // full [0,1] of the source. Halving it here would sample only the source's lower-left
     // quarter and magnify it across the whole target.
-    vec2 position = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+    vec2 position = vec2((UVE_FULLSCREEN_VERTEX_ID << 1) & 2, UVE_FULLSCREEN_VERTEX_ID & 2);
     vTexCoord = position;
     gl_Position = vec4(position * 2.0 - 1.0, 0.0, 1.0);
 }
 #endif
 
 #ifdef FRAGMENT_SHADER
-in vec2 vTexCoord;
-out vec4 FragColor;
+layout(location = 0) in vec2 vTexCoord;
+layout(location = 0) out vec4 FragColor;
 
+#ifdef UVE_VULKAN
+layout(set = 0, binding = 0) uniform sampler2D uDepthTexture;
+#else
 uniform sampler2D uDepthTexture;
+#endif
 // The projection matrix and its inverse (Math::TryInverseUVE(), Phase 2d), NOT the combined
 // view-projection or its inverse - reconstruction below stays entirely in view space, so only the
 // projection step needs undoing (uInverseProjection) and redoing (uProjection, to re-project each
 // hemisphere sample and look up its screen position - computed once on the CPU per frame rather
 // than inverting uInverseProjection again per pixel).
-uniform mat4 uInverseProjection;
-uniform mat4 uProjection;
-uniform float uRadius;
-uniform float uBias;
-uniform float uIntensity;
 
 // A fixed 12-tap hemisphere kernel (offline-generated, hemisphere-distributed, biased toward the
 // origin so more samples land close to the shaded point) stands in for the noise-texture-driven
@@ -1395,15 +1709,23 @@ void main() {
 
 const std::string_view kUIOverlaySource = R"GLSLSRC(#version 450 core
 
+#ifdef UVE_VULKAN
+layout(push_constant) uniform UveUiOverlayParameters {
+    mat4 uProjection;
+} uveParameters;
+#define uProjection uveParameters.uProjection
+#else
+uniform mat4 uProjection;
+#endif
+
 #ifdef VERTEX_SHADER
 layout(location = 0) in vec2 aPosition;
 layout(location = 1) in vec2 aTexCoord;
 layout(location = 2) in vec4 aColor;
 
-out vec2 vTexCoord;
-out vec4 vColor;
+layout(location = 0) out vec2 vTexCoord;
+layout(location = 1) out vec4 vColor;
 
-uniform mat4 uProjection;
 
 void main() {
     vTexCoord = aTexCoord;
@@ -1413,12 +1735,16 @@ void main() {
 #endif
 
 #ifdef FRAGMENT_SHADER
-in vec2 vTexCoord;
-in vec4 vColor;
+layout(location = 0) in vec2 vTexCoord;
+layout(location = 1) in vec4 vColor;
 
-out vec4 FragColor;
+layout(location = 0) out vec4 FragColor;
 
+#ifdef UVE_VULKAN
+layout(set = 0, binding = 0) uniform sampler2D uSourceTexture;
+#else
 uniform sampler2D uSourceTexture;
+#endif
 
 void main() {
     FragColor = texture(uSourceTexture, vTexCoord) * vColor;

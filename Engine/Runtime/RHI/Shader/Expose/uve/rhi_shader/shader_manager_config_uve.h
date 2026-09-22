@@ -4,6 +4,7 @@
 #pragma once
 
 #include <filesystem>
+#include <string>
 
 namespace UVE::Render::Shader {
 
@@ -24,6 +25,19 @@ struct ShaderManagerConfigUVE {
 
     /// Forwarded into every compile's injected `#define UVE_DEBUG 0|1` block.
     bool injectDebugDefineUVE = true;
+
+    /// When true, ShaderManagerUVE looks for an offline, backend-native artifact before it
+    /// preprocesses the authoring GLSL source. Missing artifacts are not fatal: the manager falls
+    /// back to the existing source/embedded path, which keeps Null/OpenGL development builds
+    /// usable when the optional artifact target was not built. The artifact mount is expected to
+    /// contain `<artifact-key>/<stage>/<shader-stem>.<target>.<extension>` plus a per-stage
+    /// manifest. Legacy descriptors with no artifact key use the shader filename stem as the key;
+    /// imported assets should persist a path-derived key to avoid same-name collisions.
+    bool preferCookedArtifactsUVE = true;
+
+    /// VFS prefix containing the cooked shader-artifact tree. EngineCoreUVE mounts the configured
+    /// real artifact directory at this prefix before constructing the manager.
+    std::string cookedArtifactMountPrefixUVE = "shaders/cooked";
 };
 
 } // namespace UVE::Render::Shader

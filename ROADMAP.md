@@ -240,13 +240,39 @@ is built from — is catalogued in `FOUNDATION.md`, which follows the same statu
   entry names — multi-threaded command recording (M4) and explicit memory/barrier management
   (the M2c staging discipline, M2e tracked-layout barriers, M3 device-local placement, M5b
   image barriers) — are now real and pixel-proven; the remaining known gaps are tracked as
-  their own entries below: the engine-level ComputeSystemUVE layer (Part 7.2) and shader
+  their own entries below: GPU-resident workload ownership and shader
   cross-compilation tooling
-- [ ] A backend for each target OS's native graphics API where OpenGL is not the best
-  choice on that platform
-- [ ] Shader cross-compilation so one shader source authors once and targets every backend
-  (currently shaders are authored directly in one shading language for one backend)
-- [ ] GPU compute-shader support (for culling, particle simulation, skinning, etc. on the
+- [~] A backend for each target OS's native graphics API where OpenGL is not the best
+  choice on that platform — the RHI now exposes an honest low-to-high capability profile
+  (`RenderDeviceCapabilitiesUVE`) so Windows/D3D12, macOS/iOS/Metal, Linux/Vulkan, and
+  Android/Vulkan backends can negotiate feature tiers without leaking native types. The
+  native D3D12 and Metal implementations, and the mobile surface adapters, remain open.
+- [~] Shader cross-compilation so one shader source authors once and targets every backend
+  — `Engine/Tools/compile_shaders.py` now provides a build-time GLSL → SPIR-V → generated
+  GLSL/HLSL/MSL pipeline for Vulkan/Android Vulkan, OpenGL/GLES, D3D12, macOS, and iOS, with source hashes,
+  compiler versions, target artifacts, and a manifest. CMake now exposes the opt-in aggregate
+  `uve_builtin_shader_artifacts` target through `UVE_BUILD_BUILTIN_SHADER_ARTIFACTS=ON`; it
+  covers the five compute built-ins used by the current GPU workload proofs, the B1
+  `bindless_probe.glsl` descriptor-set fixture, every currently shipped basic/material, shadow,
+  post-processing, and UI graphics source, and the named instanced shadow variants. Those migrated
+  shaders use one authoring source with OpenGL default-block uniforms and Vulkan push constants
+  selected by target policy; embedded fallback strings remain byte-identical to the audited source
+  files. ShaderManagerUVE now mounts an optional cooked tree and selects the backend artifact
+  (`.spv` for Vulkan, generated GLSL for OpenGL/GLES) before falling back to source where that
+  backend supports source compilation. Format-3 manifests are checked at runtime for source
+  fingerprint, stage, entry point, and target defines; requests with extra defines bypass mismatched
+  cooked variants. Repository CI enables this target, validates Vulkan and OpenGL-semantics SPIR-V,
+  checks graphics, GLES, instancing, bindless lit variants, and target-policy manifests, and performs
+  SPIRV-Cross JSON reflection checks for the B1 set-1 bindings. The built-in lit material now has an
+  explicit, capability-gated `UVE_BINDLESS_MATERIAL_CONTRACT`: Vulkan binds its material textures
+  from set 1 while shadow samplers remain in set 0, and unsupported/exhausted devices retain the
+  fixed-slot path. The production Vulkan suite now also loads the generated `lit_shadowed_3d`
+  bindless stages and verifies red/green material pixels through the reflected frame contract.
+  Remaining: platform-native final compilation, broader hardware validation, and broader runtime
+  artifact packaging; imported `.vert`/`.frag`/`.comp` materials now carry validated VFS source
+  identities and collision-safe cooked-artifact keys through the asset importer and renderer.
+  Runtime source compilation remains the deterministic fallback where valid.
+- [~] GPU compute-shader support (for culling, particle simulation, skinning, etc. on the
   GPU instead of the CPU) — RHI level completed with M5a (compute pipelines, DispatchUVE,
   SSBO write path) and M5b (STORAGE_IMAGE descriptors, GENERAL transitions + image barriers,
   unified texture-slot space, pixel-proven on lavapipe and GL); the engine-level
@@ -309,7 +335,30 @@ is built from — is catalogued in `FOUNDATION.md`, which follows the same statu
   GLSL has no portable float64 and a double CPU path would have left a permanent ~1 ULP
   disagreement on roughly one vertex in six, forcing every skinning test onto a tolerance.
   Pose resolution stays on the CPU: walking a parent chain is serial work a dispatch cannot help.
-- [ ] Bindless/descriptor-indexing-style resource binding for reduced per-draw overhead
+  Remaining for this program is GPU-resident particle emission/compaction and verification on
+  every new native backend.
+- [~] Bindless/descriptor-indexing-style resource binding for reduced per-draw overhead — the
+  backend-neutral `BindlessResourceTableUVE` provides bounded per-kind descriptor arrays,
+  stable slots, generation-checked handles, deterministic exhaustion, and a shared fallback
+  contract for low-tier devices. Vulkan B1 now negotiates the optional Vulkan 1.2 descriptor-
+  indexing prerequisites, creates a dedicated fixed 256-entry global set at shader set 1,
+  publishes native sampled texture, RGBA8 storage-image, and storage-buffer indices through the
+  RHI, and replaces destroyed entries with deterministic white/black/zero sinks before recycling
+  slots;
+  set 0 and the existing tuple descriptors remain the fallback/migration path. The shared
+  shader convention and artifact documentation are recorded in `Engine/Tools/SHADER_PIPELINE.md`.
+  A Vulkan integration test now checks capability-gated slot publication, format restrictions,
+  destruction invalidation, and a construction-time forced fallback on the same driver. The built-in
+  lit material path now consumes the sampled-texture array when Vulkan capability negotiation and
+  the explicit two-stage source marker both succeed; frame diagnostics report bindless versus
+  fixed-slot material draws. CI compiles and SPIR-V-validates the B1 fixture and lit bindless
+  variants, reflects their set-1 bindings, and the real Vulkan suite now draws a two-texture
+  bindless material probe plus the generated production `lit_shadowed_3d` stages, checking selected
+  red/green pixels under the validation layer. CI runs that focused Vulkan suite and confirms the
+  full test suite remains green. Remaining evidence is capacity/performance measurements, native
+  D3D12 descriptor heaps, and Metal argument buffers/mobile validation; generic imported-material
+  packaging now carries a validated VFS source identity and collision-safe cooked-artifact key from
+  the shader importer through Renderer3DUVE and ShaderManagerUVE.
 
 ---
 

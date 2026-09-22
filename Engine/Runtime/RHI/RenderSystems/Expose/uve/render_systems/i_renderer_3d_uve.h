@@ -57,6 +57,12 @@ struct Renderer3DFrameDiagnosticsUVE final {
     /// from reading the material assets.
     std::size_t instancedDrawCallsRecorded = 0U;
     std::size_t instancedObjectsRecorded = 0U;
+    /// Material binding evidence for the optional native descriptor-indexing tier. These are draw
+    /// counts, not capability claims: a device can advertise the tier while a legacy material still
+    /// correctly uses the deterministic fixed-slot path.
+    std::size_t bindlessMaterialDrawsRecorded = 0U;
+    std::size_t fixedSlotMaterialDrawsRecorded = 0U;
+    bool bindlessMaterialTierAvailable = false;
     /// Placement-cache outcome for this frame's extraction walk. Surfaced because a cache whose
     /// hit rate nobody can see is a cache nobody can tell is broken: a key bug that misses every
     /// frame costs an extra comparison on top of the original work and otherwise looks identical

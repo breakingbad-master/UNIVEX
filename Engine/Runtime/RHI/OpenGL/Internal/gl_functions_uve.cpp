@@ -16,7 +16,10 @@ template <typename TFunctionPointer>
 
 bool GlFunctionsUVE::IsCompleteUVE() const noexcept {
     return glGenBuffers != nullptr && glDeleteBuffers != nullptr && glBindBuffer != nullptr &&
-           glBufferData != nullptr && glBufferSubData != nullptr && glGetBufferSubData != nullptr &&
+           glBufferData != nullptr && glBufferSubData != nullptr &&
+#if !defined(__ANDROID__)
+           glGetBufferSubData != nullptr &&
+#endif
            glBindBufferBase != nullptr &&
            glGenVertexArrays != nullptr && glDeleteVertexArrays != nullptr && glBindVertexArray != nullptr &&
            glVertexAttribPointer != nullptr && glEnableVertexAttribArray != nullptr && glCreateShader != nullptr &&
@@ -41,7 +44,9 @@ GlFunctionsUVE LoadGlFunctionsUVE(void* (*getProcAddress)(const char*)) {
     functions.glBindBuffer = LoadOneUVE<PFNGLBINDBUFFERPROC>(getProcAddress, "glBindBuffer");
     functions.glBufferData = LoadOneUVE<PFNGLBUFFERDATAPROC>(getProcAddress, "glBufferData");
     functions.glBufferSubData = LoadOneUVE<PFNGLBUFFERSUBDATAPROC>(getProcAddress, "glBufferSubData");
+#if !defined(__ANDROID__)
     functions.glGetBufferSubData = LoadOneUVE<PFNGLGETBUFFERSUBDATAPROC>(getProcAddress, "glGetBufferSubData");
+#endif
     functions.glBindBufferBase = LoadOneUVE<PFNGLBINDBUFFERBASEPROC>(getProcAddress, "glBindBufferBase");
 
     // M5a: optional compute entry points — may stay null on pre-4.3 contexts (see GlFunctionsUVE).
@@ -102,9 +107,20 @@ GlFunctionsUVE LoadGlFunctionsUVE(void* (*getProcAddress)(const char*)) {
     functions.glGetActiveUniform = LoadOneUVE<PFNGLGETACTIVEUNIFORMPROC>(getProcAddress, "glGetActiveUniform");
     functions.glGetProgramBinary = LoadOneUVE<PFNGLGETPROGRAMBINARYPROC>(getProcAddress, "glGetProgramBinary");
     functions.glProgramBinary = LoadOneUVE<PFNGLPROGRAMBINARYPROC>(getProcAddress, "glProgramBinary");
+#if !defined(__ANDROID__)
+    functions.glGetProgramInterfaceiv =
+        LoadOneUVE<PFNGLGETPROGRAMINTERFACEIVPROC>(getProcAddress, "glGetProgramInterfaceiv");
+    functions.glGetProgramResourceiv =
+        LoadOneUVE<PFNGLGETPROGRAMRESOURCEIVPROC>(getProcAddress, "glGetProgramResourceiv");
+#endif
 
+#if defined(__ANDROID__)
+    functions.glDebugMessageCallback =
+        LoadOneUVE<PFNGLDEBUGMESSAGECALLBACKPROC>(getProcAddress, "glDebugMessageCallbackKHR");
+#else
     functions.glDebugMessageCallback =
         LoadOneUVE<PFNGLDEBUGMESSAGECALLBACKPROC>(getProcAddress, "glDebugMessageCallback");
+#endif
 
     return functions;
 }

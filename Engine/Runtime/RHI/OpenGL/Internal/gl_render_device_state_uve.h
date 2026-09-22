@@ -47,6 +47,8 @@ struct GlDeviceStateUVE {
     GLint maxCombinedTextureImageUnits = 0;
     GLint maxUniformBufferBindings = 0;
     GLint maxVertexAttribs = 0;
+    GLint contextMajorVersion = 0;
+    GLint contextMinorVersion = 0;
 
     /// GL_SHADER_STORAGE_BUFFER_BINDINGS, queried only when supportsComputeShadersUVE (SSBOs
     /// share compute's GL 4.3 core floor; M2f binds them from GRAPHICS-stage shaders). Stays 0
@@ -125,6 +127,12 @@ struct GlDeviceStateUVE {
             bool isImageUniform = false;
         };
         std::unordered_map<std::string, UniformRecordUVE, TransparentStringHashUVE, TransparentStringEqualUVE> uniforms;
+#if !defined(__ANDROID__)
+        /// Logical storage slot -> the shader-declared GL binding point. Most shaders are
+        /// contiguous; the OpenGL instanced shadow variant intentionally declares 0 and 2 to
+        /// preserve its legacy binding, so logical slot 1 must map to physical point 2.
+        std::vector<std::uint32_t> storageBindingSlots;
+#endif
     };
     std::unordered_map<std::uint32_t, PipelineRecordUVE> pipelines;
     std::uint32_t nextPipelineHandle = 1;

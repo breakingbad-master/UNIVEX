@@ -65,6 +65,15 @@ constexpr std::string_view kShaderTemporarySuffixUVE = ".uve_shader_tmp";
     return true;
 }
 
+[[nodiscard]] std::string DeriveCookedArtifactKeyUVE(const std::string_view virtualFilePath) {
+    const std::size_t extensionSeparator = virtualFilePath.rfind('.');
+    if (extensionSeparator == std::string_view::npos ||
+        virtualFilePath.find('/', extensionSeparator) != std::string_view::npos) {
+        return std::string(virtualFilePath);
+    }
+    return std::string(virtualFilePath.substr(0U, extensionSeparator));
+}
+
 [[nodiscard]] bool ShaderStageForExtensionUVE(const std::string& extension,
                                                ShaderStageKindUVE& outStage) noexcept {
     if (extension == "vert") {
@@ -84,7 +93,7 @@ constexpr std::string_view kShaderTemporarySuffixUVE = ".uve_shader_tmp";
 
 [[nodiscard]] bool ImportShaderSourceUVE(const std::filesystem::path& sourcePath,
                                          const std::filesystem::path& destinationPath,
-                                         const AssetImportSettingsUVE& /*settings*/) {
+                                         const AssetImportSettingsUVE& baseSettings) {
     if (NormalizeShaderExtensionUVE(destinationPath.extension().string()) != "uveshader") {
         UVE_ERROR("ShaderSourceImporterUVE: destination \"{}\" must use the .uveshader extension",
                   destinationPath.string());
@@ -108,6 +117,13 @@ constexpr std::string_view kShaderTemporarySuffixUVE = ".uve_shader_tmp";
     shader.stage = stage;
     shader.sourceCode = std::move(sourceCode);
     shader.entryPointName = "main";
+    if (const auto* const settings = dynamic_cast<const ShaderImportSettingsUVE*>(&baseSettings);
+        settings != nullptr) {
+        shader.virtualFilePath = settings->virtualFilePath;
+        shader.cookedArtifactKey = settings->cookedArtifactKey.empty()
+            ? DeriveCookedArtifactKeyUVE(settings->virtualFilePath)
+            : settings->cookedArtifactKey;
+    }
     return Detail::PublishAssetAtomicallyUVE(destinationPath, kShaderSourceImporterNameUVE,
                                              kShaderTemporarySuffixUVE,
                                              [&shader](const std::filesystem::path& temporaryPath) {
@@ -116,6 +132,10 @@ constexpr std::string_view kShaderTemporarySuffixUVE = ".uve_shader_tmp";
 }
 
 } // namespace
+
+std::string ShaderImportSettingsUVE::GetCacheVersionUVE() const {
+    return "shader-source-v3;virtual-path=" + virtualFilePath + ";cooked-key=" + cookedArtifactKey;
+}
 
 void RegisterShaderSourceImporterUVE(IAssetImporterUVE& importer) {
     importer.RegisterImporterUVE("vert", &ImportShaderSourceUVE);

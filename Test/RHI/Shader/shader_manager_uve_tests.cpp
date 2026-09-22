@@ -380,5 +380,37 @@ TEST(InstancedLitVariantUVETest, TheInstancedPathIndexesByBaseIndexPlusInstanceI
               std::string_view::npos);
 }
 
+// ---------------------------------------------------------------------------
+// Optional native material bindless variant. The renderer only injects UVE_BINDLESS when both
+// stages carry this marker and Vulkan capability negotiation succeeds. These source assertions pin
+// the migration contract without pretending that a source-level test is GPU pixel evidence.
+// ---------------------------------------------------------------------------
+
+TEST(BindlessLitVariantUVETest, UsesFixedNativeArrayAndNonUniformMaterialIndices) {
+    const std::string_view source = BuiltIn::kLitShadowed3DSource;
+    EXPECT_NE(source.find("UVE_BINDLESS_MATERIAL_CONTRACT"), std::string_view::npos);
+    EXPECT_NE(source.find("layout(set = 1, binding = 0) uniform sampler2D uveMaterialTextures[256]"),
+              std::string_view::npos);
+    EXPECT_NE(source.find("nonuniformEXT(uint(index))"), std::string_view::npos);
+    EXPECT_NE(source.find("uAlbedoTextureIndex"), std::string_view::npos);
+    EXPECT_NE(source.find("uNormalTextureIndex"), std::string_view::npos);
+    EXPECT_NE(source.find("uAOTextureIndex"), std::string_view::npos);
+}
+
+TEST(BindlessLitVariantUVETest, KeepsMaterialFallbackAndShadowBindingsDistinct) {
+    const std::string_view source = BuiltIn::kLitShadowed3DSource;
+    const std::size_t vulkanStart = source.find("#ifdef UVE_VULKAN");
+    ASSERT_NE(vulkanStart, std::string_view::npos);
+    const std::string_view vulkanSource = source.substr(vulkanStart);
+    EXPECT_NE(vulkanSource.find("layout(set = 0, binding = 4) uniform sampler2D uAlbedoTexture"),
+              std::string_view::npos);
+    EXPECT_NE(vulkanSource.find("layout(set = 0, binding = 7) uniform sampler2D uShadowMapTexture0"),
+              std::string_view::npos);
+    EXPECT_NE(vulkanSource.find("#if defined(UVE_BINDLESS) && defined(UVE_VULKAN)"),
+              std::string_view::npos);
+    EXPECT_NE(vulkanSource.find("texture(uveMaterialTextures[UVE_BINDLESS_INDEX(uAlbedoTextureIndex)]"),
+              std::string_view::npos);
+}
+
 } // namespace
 } // namespace UVE::Render::Shader::Tests

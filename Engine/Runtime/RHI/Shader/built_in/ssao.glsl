@@ -1,8 +1,35 @@
 #version 450 core
 
+#ifdef UVE_VULKAN
+layout(push_constant) uniform UveSsaoParameters {
+    mat4 uInverseProjection;
+    mat4 uProjection;
+    float uRadius;
+    float uBias;
+    float uIntensity;
+} uveParameters;
+#define uInverseProjection uveParameters.uInverseProjection
+#define uProjection uveParameters.uProjection
+#define uRadius uveParameters.uRadius
+#define uBias uveParameters.uBias
+#define uIntensity uveParameters.uIntensity
+#else
+uniform mat4 uInverseProjection;
+uniform mat4 uProjection;
+uniform float uRadius;
+uniform float uBias;
+uniform float uIntensity;
+#endif
+
 #ifdef VERTEX_SHADER
 // Fullscreen triangle via the vertex-ID trick: no vertex buffer is required.
-out vec2 vTexCoord;
+layout(location = 0) out vec2 vTexCoord;
+
+#ifdef UVE_VULKAN
+#define UVE_FULLSCREEN_VERTEX_ID gl_VertexIndex
+#else
+#define UVE_FULLSCREEN_VERTEX_ID gl_VertexID
+#endif
 
 void main() {
     // position is (0,0), (2,0), (0,2) - the oversized triangle that covers clip space once
@@ -10,27 +37,26 @@ void main() {
     // that same mapping, (ndc+1)/2 == position, so the visible NDC range [-1,1] samples the
     // full [0,1] of the source. Halving it here would sample only the source's lower-left
     // quarter and magnify it across the whole target.
-    vec2 position = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+    vec2 position = vec2((UVE_FULLSCREEN_VERTEX_ID << 1) & 2, UVE_FULLSCREEN_VERTEX_ID & 2);
     vTexCoord = position;
     gl_Position = vec4(position * 2.0 - 1.0, 0.0, 1.0);
 }
 #endif
 
 #ifdef FRAGMENT_SHADER
-in vec2 vTexCoord;
-out vec4 FragColor;
+layout(location = 0) in vec2 vTexCoord;
+layout(location = 0) out vec4 FragColor;
 
+#ifdef UVE_VULKAN
+layout(set = 0, binding = 0) uniform sampler2D uDepthTexture;
+#else
 uniform sampler2D uDepthTexture;
+#endif
 // The projection matrix and its inverse (Math::TryInverseUVE(), Phase 2d), NOT the combined
 // view-projection or its inverse - reconstruction below stays entirely in view space, so only the
 // projection step needs undoing (uInverseProjection) and redoing (uProjection, to re-project each
 // hemisphere sample and look up its screen position - computed once on the CPU per frame rather
 // than inverting uInverseProjection again per pixel).
-uniform mat4 uInverseProjection;
-uniform mat4 uProjection;
-uniform float uRadius;
-uniform float uBias;
-uniform float uIntensity;
 
 // A fixed 12-tap hemisphere kernel (offline-generated, hemisphere-distributed, biased toward the
 // origin so more samples land close to the shaded point) stands in for the noise-texture-driven

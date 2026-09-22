@@ -7,7 +7,7 @@ namespace UVE::Render::Detail {
 
 namespace {
 
-#if UVE_DEBUG
+#if UVE_DEBUG && !defined(__ANDROID__)
 [[nodiscard]] const char* GlDebugSourceNameUVE(const GLenum source) noexcept {
     switch (source) {
         case GL_DEBUG_SOURCE_API:
@@ -83,7 +83,7 @@ void APIENTRY GlDebugMessageCallbackUVE(const GLenum source, const GLenum type, 
 } // namespace
 
 void RegisterGlDebugCallbackUVE(const GlFunctionsUVE& functions) noexcept {
-#if UVE_DEBUG
+#if UVE_DEBUG && !defined(__ANDROID__)
     if (functions.glDebugMessageCallback == nullptr) {
         UVE_INFO("GlRenderDeviceUVE: GL_KHR_debug unavailable on this context; relying on "
                  "UVE_GL_CHECK_ERROR_UVE()'s manual glGetError() polling instead");

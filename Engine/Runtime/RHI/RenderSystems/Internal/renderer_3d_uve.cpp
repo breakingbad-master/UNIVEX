@@ -13,6 +13,7 @@
 #include <utility>
 #include <span>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -202,6 +203,10 @@ struct UIVertexUVE {
 inline constexpr std::uint32_t kInstanceTransformSlotUVE = 0U;
 inline constexpr std::uint32_t kInstanceNormalTransformSlotUVE = 1U;
 inline constexpr std::uint32_t kInstanceBaseSlotUVE = 2U;
+// shadow_depth.glsl has only two reflected storage bindings in its Vulkan variant (model and
+// base index), so its second slot is 1. The main lit shader has the normal-transform binding and
+// therefore keeps the three-buffer 0/1/2 contract above.
+inline constexpr std::uint32_t kShadowInstanceBaseSlotUVE = 1U;
 
 /// The most instances one frame may upload. Bounds the per-frame upload the same way
 /// kMaximumParticleGpuDrawCommandsUVE bounds particles; a batch that would exceed it is recorded
@@ -217,6 +222,15 @@ inline constexpr std::size_t kMaximumInstancesPerFrameUVE = 65'536U;
 [[nodiscard]] bool VertexSourceSupportsInstancingUVE(const std::string_view vertexSource) noexcept {
     return vertexSource.find("uInstanceBaseIndex") != std::string_view::npos &&
            vertexSource.find("gl_InstanceID") != std::string_view::npos;
+}
+
+/// Explicit opt-in marker for the production material bindless contract. A shader must carry the
+/// marker in both stages before the renderer adds UVE_BINDLESS; this prevents a fragment-only
+/// descriptor declaration from silently disagreeing with the vertex stage's frame block. The
+/// marker is intentionally source-level so old MaterialAssetUVE files remain valid and continue
+/// down the fixed-slot path on every backend.
+[[nodiscard]] bool SourceSupportsBindlessMaterialUVE(const std::string_view source) noexcept {
+    return source.find("UVE_BINDLESS_MATERIAL_CONTRACT") != std::string_view::npos;
 }
 
 inline constexpr std::size_t kMaximumParticleGpuDrawCommandsUVE = 16'384U;
@@ -242,6 +256,11 @@ struct MaterialGpuResourcesUVE {
     /// silently stack every instance on top of the first one's uModel, which looks like missing
     /// objects rather than like a bug in the renderer.
     bool supportsInstancing = false;
+    /// True only when the device has the native descriptor-indexing tier, both shader stages opt
+    /// into UVE_BINDLESS_MATERIAL_CONTRACT, and all three sampled-texture indices can resolve to
+    /// live native slots (or deterministic fallback textures). Unsupported devices and exhausted
+    /// tables leave this false and use the fixed set-0 tuple bindings below.
+    bool usesBindless = false;
     Asset::AssetGuidUVE vertexShaderGuid;
     Asset::AssetGuidUVE fragmentShaderGuid;
     Asset::AssetGuidUVE albedoTextureGuid;
@@ -250,6 +269,9 @@ struct MaterialGpuResourcesUVE {
     TextureHandleUVE albedoTexture;
     TextureHandleUVE normalTexture;
     TextureHandleUVE aoTexture;
+    std::uint32_t albedoBindlessSlot = kInvalidBindlessResourceSlotUVE;
+    std::uint32_t normalBindlessSlot = kInvalidBindlessResourceSlotUVE;
+    std::uint32_t aoBindlessSlot = kInvalidBindlessResourceSlotUVE;
 };
 
 /// Fixed texture-unit slots RecordItemsUVE() binds every material's three textures to, and the
@@ -1149,12 +1171,64 @@ struct Renderer3DUVE::ImplUVE {
 
         const Asset::ShaderAssetUVE* const vertexShaderAsset = vertexShaderHandle.TryGetUVE();
         const Asset::ShaderAssetUVE* const fragmentShaderAsset = fragmentShaderHandle.TryGetUVE();
+        if (vertexShaderAsset == nullptr || fragmentShaderAsset == nullptr) {
+            UVE_ERROR("Renderer3DUVE: ready shader handle has no payload; material skipped");
+            return nullptr;
+        }
+        const bool supportsInstancing = VertexSourceSupportsInstancingUVE(vertexShaderAsset->sourceCode);
+        const bool materialRequestsBindless =
+            SourceSupportsBindlessMaterialUVE(vertexShaderAsset->sourceCode) &&
+            SourceSupportsBindlessMaterialUVE(fragmentShaderAsset->sourceCode);
+        const RenderDeviceCapabilitiesUVE capabilities = renderDevice.GetCapabilitiesUVE();
+        // The source contract currently maps set 1 to Vulkan's native descriptor array. Do not
+        // enable it merely because a future backend reports a similarly named capability until
+        // that backend has its own shader/resource-layout implementation.
+        const bool nativeBindlessTier = capabilities.supportsBindlessResources &&
+                                        capabilities.supportsDescriptorIndexing &&
+                                        renderDevice.GetBackendNameUVE().starts_with("Vulkan");
+        const auto resolveBindlessSlot = [this](const TextureHandleUVE texture,
+                                                 const TextureHandleUVE fallback) noexcept {
+            const std::uint32_t directSlot = renderDevice.GetBindlessSampledTextureSlotUVE(texture);
+            if (directSlot != kInvalidBindlessResourceSlotUVE) {
+                return directSlot;
+            }
+            return renderDevice.GetBindlessSampledTextureSlotUVE(fallback);
+        };
+        const std::uint32_t albedoBindlessSlot = resolveBindlessSlot(*albedoTexture, fallbackWhiteTexture);
+        const std::uint32_t normalBindlessSlot = resolveBindlessSlot(*normalTexture, fallbackNormalTexture);
+        const std::uint32_t aoBindlessSlot = resolveBindlessSlot(*aoTexture, fallbackWhiteTexture);
+        const bool usesBindless = nativeBindlessTier && materialRequestsBindless &&
+                                   albedoBindlessSlot != kInvalidBindlessResourceSlotUVE &&
+                                   normalBindlessSlot != kInvalidBindlessResourceSlotUVE &&
+                                   aoBindlessSlot != kInvalidBindlessResourceSlotUVE;
 
         // `.uveshader` assets are envelope files rather than raw GLSL files, so their already
-        // decoded source is supplied as the manager fallback and the root virtual path stays empty.
-        // Includes inside that source still use the normal virtual include paths and participate in
-        // program-level dependency tracking; AssetReloaded events invalidate root shader assets.
+        // decoded source is normally supplied as the manager fallback and the root virtual path
+        // stays empty. The canonical built-in lit source is the deliberate exception: retaining
+        // its cooked virtual path lets Vulkan consume the generated base/bindless artifact rather
+        // than handing GLSL text to a SPIR-V-only device. Custom material sources still require
+        // their own cooked-artifact packaging before they can run on Vulkan.
         Shader::ShaderProgramStagesDescUVE programDesc;
+        const bool isCanonicalLitSource =
+            vertexShaderAsset->sourceCode == Shader::BuiltIn::kLitShadowed3DSource &&
+            fragmentShaderAsset->sourceCode == Shader::BuiltIn::kLitShadowed3DSource;
+        // Imported shader envelopes carry their own canonical VFS source paths. This is the
+        // generic material path: the manager can locate either the authoring file or the matching
+        // cooked artifact without a renderer-side filename convention. Keep the built-in
+        // recognition only as a backwards-compatible bridge for canonical assets authored before
+        // ShaderAssetUVE::virtualFilePath existed.
+        programDesc.vertexSource.virtualFilePath = vertexShaderAsset->virtualFilePath;
+        programDesc.vertexSource.cookedArtifactKeyUVE = vertexShaderAsset->cookedArtifactKey;
+        programDesc.fragmentSource.virtualFilePath = fragmentShaderAsset->virtualFilePath;
+        programDesc.fragmentSource.cookedArtifactKeyUVE = fragmentShaderAsset->cookedArtifactKey;
+        if (isCanonicalLitSource) {
+            if (programDesc.vertexSource.virtualFilePath.empty()) {
+                programDesc.vertexSource.virtualFilePath = std::string(Shader::BuiltIn::kLitShadowed3DVirtualPath);
+            }
+            if (programDesc.fragmentSource.virtualFilePath.empty()) {
+                programDesc.fragmentSource.virtualFilePath = std::string(Shader::BuiltIn::kLitShadowed3DVirtualPath);
+            }
+        }
         programDesc.vertexSource.stage = ShaderStageUVE::Vertex;
         programDesc.vertexSource.embeddedFallbackSourceCode = vertexShaderAsset->sourceCode;
         programDesc.vertexSource.entryPointName = vertexShaderAsset->entryPointName;
@@ -1165,6 +1239,17 @@ struct Renderer3DUVE::ImplUVE {
         programDesc.fragmentSource.entryPointName = fragmentShaderAsset->entryPointName;
         programDesc.fragmentSource.debugNameUVE =
             "Material fragment " + assetDatabase.ResolveUVE(material->fragmentShader).string();
+        // Both stages receive the interface defines together. The Vulkan lit shader declares its
+        // frame block and instanced storage bindings outside the stage guards, so defining one
+        // stage only would create a descriptor-layout mismatch during pipeline reflection.
+        if (supportsInstancing) {
+            programDesc.vertexSource.extraDefines.emplace_back("UVE_INSTANCED", "1");
+            programDesc.fragmentSource.extraDefines.emplace_back("UVE_INSTANCED", "1");
+        }
+        if (usesBindless) {
+            programDesc.vertexSource.extraDefines.emplace_back("UVE_BINDLESS", "1");
+            programDesc.fragmentSource.extraDefines.emplace_back("UVE_BINDLESS", "1");
+        }
         programDesc.vertexLayout = MeshVertexLayoutUVE();
         programDesc.vertexStride = static_cast<std::uint32_t>(sizeof(Asset::MeshVertexUVE));
         programDesc.depthTestEnabled = true;
@@ -1172,12 +1257,22 @@ struct Renderer3DUVE::ImplUVE {
         programDesc.debugNameUVE = "Material " + assetDatabase.ResolveUVE(guid).string();
         const std::shared_ptr<Shader::ShaderProgramUVE> program = shaderManager.CreateProgramFromStagesUVE(programDesc);
 
-        const auto insertResult = materialCache.emplace(
-            guid, MaterialGpuResourcesUVE{program,
-                                          VertexSourceSupportsInstancingUVE(vertexShaderAsset->sourceCode),
-                                          material->vertexShader, material->fragmentShader,
-                                          material->albedoTexture, material->normalTexture, material->aoTexture,
-                                          *albedoTexture, *normalTexture, *aoTexture});
+        MaterialGpuResourcesUVE resources;
+        resources.program = program;
+        resources.supportsInstancing = supportsInstancing;
+        resources.usesBindless = usesBindless;
+        resources.vertexShaderGuid = material->vertexShader;
+        resources.fragmentShaderGuid = material->fragmentShader;
+        resources.albedoTextureGuid = material->albedoTexture;
+        resources.normalTextureGuid = material->normalTexture;
+        resources.aoTextureGuid = material->aoTexture;
+        resources.albedoTexture = *albedoTexture;
+        resources.normalTexture = *normalTexture;
+        resources.aoTexture = *aoTexture;
+        resources.albedoBindlessSlot = albedoBindlessSlot;
+        resources.normalBindlessSlot = normalBindlessSlot;
+        resources.aoBindlessSlot = aoBindlessSlot;
+        const auto insertResult = materialCache.emplace(guid, std::move(resources));
         return &insertResult.first->second;
     }
 
@@ -1243,7 +1338,7 @@ struct Renderer3DUVE::ImplUVE {
                         }
                         instancedShadowProgram->ApplyToUVE(commandBuffer);
                         commandBuffer.BindStorageBufferUVE(instanceTransformBuffer, kInstanceTransformSlotUVE);
-                        commandBuffer.BindStorageBufferUVE(instanceBaseBuffer, kInstanceBaseSlotUVE);
+                        commandBuffer.BindStorageBufferUVE(instanceBaseBuffer, kShadowInstanceBaseSlotUVE);
                         commandBuffer.BindVertexBufferUVE(meshResources.vertexBuffer);
                         commandBuffer.BindIndexBufferUVE(meshResources.indexBuffer);
                         commandBuffer.DrawIndexedUVE(meshResources.indexCount,
@@ -1460,11 +1555,19 @@ struct Renderer3DUVE::ImplUVE {
 
     void ApplyFrameAndMaterialUniformsUVE(Shader::ShaderProgramUVE& program,
                                           const Asset::MaterialAssetUVE& material,
-                                          const FrameUniformsUVE& frameUniforms) {
+                                          const FrameUniformsUVE& frameUniforms,
+                                          const MaterialGpuResourcesUVE* materialResources = nullptr) {
         ApplyLightingUniformsUVE(program, frameUniforms);
         program.SetVector3UVE("uViewPosition", frameUniforms.viewPosition);
+        const bool usesExplicitVulkanDescriptors = renderDevice.GetBackendNameUVE().starts_with("Vulkan");
         program.SetMatrix4x4UVE(uniformNames.legacyLightSpaceMatrix, frameUniforms.lightSpaceMatrices[0]);
-        program.SetIntUVE("uShadowMapTexture", static_cast<std::int32_t>(kShadowMapTextureSlotUVE));
+        if (!usesExplicitVulkanDescriptors) {
+            // OpenGL keeps the legacy default-block sampler and sampler-array contract. Vulkan
+            // binds these resources by reflected descriptor binding (material 4-6, cascades
+            // 7-9), so sending GL texture-unit integers would only create misleading uniform
+            // name-miss diagnostics for the deliberately separate Vulkan sampler declarations.
+            program.SetIntUVE("uShadowMapTexture", static_cast<std::int32_t>(kShadowMapTextureSlotUVE));
+        }
         program.SetIntUVE("uShadowCascadeCount", frameUniforms.cascadeCount);
         program.SetFloatUVE("uShadowCascadeBlendRatio", frameUniforms.cascadeBlendRatio);
         for (std::size_t cascadeIndex = 0; cascadeIndex < kShadowCascadeCountUVE; ++cascadeIndex) {
@@ -1474,34 +1577,61 @@ struct Renderer3DUVE::ImplUVE {
                                     frameUniforms.lightSpaceMatrices[cascadeIndex]);
             program.SetFloatUVE(uniformNames.shadowCascadeSplits[cascadeIndex],
                                 frameUniforms.cascadeSplits[cascadeIndex]);
-            program.SetIntUVE(uniformNames.shadowMapTextures[cascadeIndex],
-                              static_cast<std::int32_t>(textureSlot));
+            if (!usesExplicitVulkanDescriptors) {
+                program.SetIntUVE(uniformNames.shadowMapTextures[cascadeIndex],
+                                  static_cast<std::int32_t>(textureSlot));
+            }
         }
         program.SetIntUVE("uShadowPcfKernelRadius", shadowPcfKernelRadius);
         program.SetVector3UVE("uAlbedoColor", material.albedoColor);
         program.SetFloatUVE("uMetallic", material.metallic);
         program.SetFloatUVE("uRoughness", material.roughness);
         program.SetVector3UVE("uEmissiveColor", material.emissiveColor);
-        program.SetIntUVE("uAlbedoTexture", static_cast<std::int32_t>(kAlbedoTextureSlotUVE));
-        program.SetIntUVE("uNormalTexture", static_cast<std::int32_t>(kNormalTextureSlotUVE));
-        program.SetIntUVE("uAOTexture", static_cast<std::int32_t>(kAoTextureSlotUVE));
+        if (!usesExplicitVulkanDescriptors) {
+            program.SetIntUVE("uAlbedoTexture", static_cast<std::int32_t>(kAlbedoTextureSlotUVE));
+            program.SetIntUVE("uNormalTexture", static_cast<std::int32_t>(kNormalTextureSlotUVE));
+            program.SetIntUVE("uAOTexture", static_cast<std::int32_t>(kAoTextureSlotUVE));
+        } else if (materialResources != nullptr && materialResources->usesBindless) {
+            // These are ordinary int members of the reflected Vulkan frame block. The shader
+            // converts them to nonuniform indices into set 1; no GL sampler-unit writes are
+            // allowed on this path because the native descriptor set owns the textures.
+            program.SetIntUVE("uAlbedoTextureIndex",
+                             static_cast<std::int32_t>(materialResources->albedoBindlessSlot));
+            program.SetIntUVE("uNormalTextureIndex",
+                             static_cast<std::int32_t>(materialResources->normalBindlessSlot));
+            program.SetIntUVE("uAOTextureIndex",
+                             static_cast<std::int32_t>(materialResources->aoBindlessSlot));
+        }
     }
 
     /// Binds the shadow cascades and the material's three textures - also shared by both paths.
     void BindMaterialTexturesUVE(const MaterialGpuResourcesUVE& materialResources,
                                  const FrameUniformsUVE& frameUniforms,
                                  ICommandBufferUVE& commandBuffer) {
+        // BindTextureUVE uses the pipeline's reflected set-0 texture order, not GLSL binding
+        // numbers. The bindless material variant removes set-0 material samplers, so its three
+        // shadow samplers become logical slots 0..2; the fixed-slot variant keeps shadows at 3..5.
+        const std::uint32_t shadowSlotBase = materialResources.usesBindless ? 0U : kShadowMapTextureSlotUVE;
         if (frameUniforms.cascadeCount > 0) {
-            commandBuffer.BindTextureUVE(shadowMapTargets[0], kShadowMapTextureSlotUVE);
+            commandBuffer.BindTextureUVE(shadowMapTargets[0], shadowSlotBase);
             for (std::size_t cascadeIndex = 0; cascadeIndex < kShadowCascadeCountUVE; ++cascadeIndex) {
-                commandBuffer.BindTextureUVE(
-                    shadowMapTargets[cascadeIndex],
-                    kShadowCascadeFirstTextureSlotUVE + static_cast<std::uint32_t>(cascadeIndex));
+                commandBuffer.BindTextureUVE(shadowMapTargets[cascadeIndex],
+                                             shadowSlotBase + static_cast<std::uint32_t>(cascadeIndex));
             }
         }
-        commandBuffer.BindTextureUVE(materialResources.albedoTexture, kAlbedoTextureSlotUVE);
-        commandBuffer.BindTextureUVE(materialResources.normalTexture, kNormalTextureSlotUVE);
-        commandBuffer.BindTextureUVE(materialResources.aoTexture, kAoTextureSlotUVE);
+        if (!materialResources.usesBindless) {
+            commandBuffer.BindTextureUVE(materialResources.albedoTexture, kAlbedoTextureSlotUVE);
+            commandBuffer.BindTextureUVE(materialResources.normalTexture, kNormalTextureSlotUVE);
+            commandBuffer.BindTextureUVE(materialResources.aoTexture, kAoTextureSlotUVE);
+        }
+    }
+
+    void RecordMaterialBindingDiagnosticUVE(const MaterialGpuResourcesUVE& materialResources) noexcept {
+        if (materialResources.usesBindless) {
+            ++lastFrameDiagnostics.bindlessMaterialDrawsRecorded;
+        } else {
+            ++lastFrameDiagnostics.fixedSlotMaterialDrawsRecorded;
+        }
     }
 
     /// Records `items` as instanced draws where the material supports it, falling back to the
@@ -1561,7 +1691,8 @@ struct Renderer3DUVE::ImplUVE {
                 continue;
             }
 
-            ApplyFrameAndMaterialUniformsUVE(*program, *material, frameUniforms);
+            RecordMaterialBindingDiagnosticUVE(*materialResources);
+            ApplyFrameAndMaterialUniformsUVE(*program, *material, frameUniforms, materialResources);
             program->ApplyToUVE(commandBuffer);
             BindMaterialTexturesUVE(*materialResources, frameUniforms, commandBuffer);
             commandBuffer.BindStorageBufferUVE(instanceTransformBuffer, kInstanceTransformSlotUVE);
@@ -1613,7 +1744,8 @@ struct Renderer3DUVE::ImplUVE {
             // Normal matrix = transpose(inverse(model)); see ComputeNormalMatrixUVE, which the
             // instanced path shares so the two cannot disagree about how a normal is transformed.
             program->SetMatrix4x4UVE("uNormalMatrix", ComputeNormalMatrixUVE(item.worldMatrix));
-            ApplyFrameAndMaterialUniformsUVE(*program, *material, frameUniforms);
+            RecordMaterialBindingDiagnosticUVE(*materialResources);
+            ApplyFrameAndMaterialUniformsUVE(*program, *material, frameUniforms, materialResources);
             program->ApplyToUVE(commandBuffer);
             BindMaterialTexturesUVE(*materialResources, frameUniforms, commandBuffer);
             commandBuffer.BindVertexBufferUVE(meshResources.vertexBuffer);
@@ -1968,6 +2100,10 @@ bool Renderer3DUVE::ResizeTargetsUVE(const std::uint32_t width, const std::uint3
 
 void Renderer3DUVE::RenderFrameUVE(Scene::IEntityManagerUVE& entityManager, Scene::EntityUVE cameraEntity) {
     m_impl->lastFrameDiagnostics = Renderer3DFrameDiagnosticsUVE{};
+    const RenderDeviceCapabilitiesUVE frameCapabilities = m_impl->renderDevice.GetCapabilitiesUVE();
+    m_impl->lastFrameDiagnostics.bindlessMaterialTierAvailable =
+        frameCapabilities.supportsBindlessResources && frameCapabilities.supportsDescriptorIndexing &&
+        m_impl->renderDevice.GetBackendNameUVE().starts_with("Vulkan");
     // Reset here, not beside the main pass: the shadow cascades are recorded BEFORE it, so a reset
     // at the main pass would discard the count this counter exists to report.
     m_impl->shadowInstancedDrawCallsThisFrame = 0U;
