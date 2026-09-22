@@ -55,7 +55,7 @@ float ComputeEditorStatPercentageUVE(const std::size_t part, const std::size_t t
 std::vector<EditorRenderStatRowUVE> BuildEditorRenderStatRowsUVE(
     const Render::Renderer3DFrameDiagnosticsUVE& diagnostics) {
     std::vector<EditorRenderStatRowUVE> rows;
-    rows.reserve(12U);
+    rows.reserve(14U);
 
     rows.push_back({kSectionSceneUVE, "Mesh items", FormatCountUVE(diagnostics.meshItemsExtracted), false});
     rows.push_back({kSectionSceneUVE, "Primitive items", FormatCountUVE(diagnostics.primitiveItemsExtracted), false});
@@ -93,6 +93,12 @@ std::vector<EditorRenderStatRowUVE> BuildEditorRenderStatRowsUVE(
                     FormatCountUVE(diagnostics.instancedDrawCallsRecorded) + " covering " +
                         FormatCountUVE(diagnostics.instancedObjectsRecorded),
                     false});
+    rows.push_back({kSectionSubmissionUVE, "Bindless material draws",
+                    FormatCountUVE(diagnostics.bindlessMaterialDrawsRecorded) +
+                        (diagnostics.bindlessMaterialTierAvailable ? " (tier available)" : " (fixed-slot tier)"),
+                    false});
+    rows.push_back({kSectionSubmissionUVE, "Fixed-slot material draws",
+                    FormatCountUVE(diagnostics.fixedSlotMaterialDrawsRecorded), false});
 
     // Shadow batching. Equal batches and items means the batcher merged nothing, which happens
     // when the cascade queue arrives in an order that splits same-mesh runs apart - an ordering

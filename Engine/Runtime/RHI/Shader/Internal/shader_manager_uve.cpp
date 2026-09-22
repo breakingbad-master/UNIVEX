@@ -124,12 +124,20 @@ namespace {
 }
 
 [[nodiscard]] std::vector<std::pair<std::string, std::string>> BuildDefinesUVE(
-    ShaderStageUVE stage, bool injectDebugDefine, const std::vector<std::pair<std::string, std::string>>& extraDefines) {
+    ShaderStageUVE stage, bool injectDebugDefine, bool vulkanBackend,
+    const std::vector<std::pair<std::string, std::string>>& extraDefines) {
     std::vector<std::pair<std::string, std::string>> defines;
-    defines.reserve(extraDefines.size() + 4);
+    defines.reserve(extraDefines.size() + 5);
     defines.emplace_back("UVE_DEBUG", injectDebugDefine ? "1" : "0");
     defines.emplace_back("UVE_MOBILE", "0"); // No mobile backend exists yet - reserved.
     defines.emplace_back("UVE_BACKEND_GL", "1"); // Reserved for a future non-GL backend to define its own instead.
+    if (vulkanBackend) {
+        // Keep source fallback behavior identical to the cooked Vulkan target policy. This is
+        // essential for a generic material whose `.uveshader` has no packaged artifact yet: it
+        // must select the explicit UBO/descriptor branch, not accidentally compile the GL default
+        // block and fail later during Vulkan reflection.
+        defines.emplace_back("UVE_VULKAN", "1");
+    }
     defines.emplace_back(ShaderStageDefineNameUVE(stage), "1");
     defines.insert(defines.end(), extraDefines.begin(), extraDefines.end());
     return defines;
@@ -187,13 +195,31 @@ struct CookedArtifactFormatUVE {
     if (desc.extraDefines.empty()) {
         return std::string{};
     }
-    // Built-in instancing is the first supported cooked variant. Unknown per-request defines
-    // must never reuse the base artifact: a mismatched SPIR-V module is worse than a logged
-    // source-compile failure. Additional variants get an explicit directory key here rather than
-    // smuggling defines into a filename or relying on unordered map iteration.
-    if (desc.extraDefines.size() == 1U && desc.extraDefines.front().first == "UVE_INSTANCED" &&
-        (desc.extraDefines.front().second == "1" || desc.extraDefines.front().second == "true")) {
+
+    // Cooked variants are an explicit allow-list. Unknown per-request defines must never reuse
+    // the base artifact: a mismatched SPIR-V module is worse than a logged source-compile
+    // failure. The two material axes are canonicalized here rather than smuggled into a filename
+    // or relying on caller/map iteration order.
+    bool instanced = false;
+    bool bindless = false;
+    for (const auto& [name, value] : desc.extraDefines) {
+        const bool enabled = value == "1" || value == "true";
+        if (name == "UVE_INSTANCED" && enabled) {
+            instanced = true;
+        } else if (name == "UVE_BINDLESS" && enabled) {
+            bindless = true;
+        } else {
+            return std::nullopt;
+        }
+    }
+    if (instanced && bindless) {
+        return std::string{"instanced_bindless"};
+    }
+    if (instanced) {
         return std::string{"instanced"};
+    }
+    if (bindless) {
+        return std::string{"bindless"};
     }
     return std::nullopt;
 }
@@ -334,12 +360,22 @@ struct CookedArtifactFormatUVE {
         return std::nullopt;
     }
     const std::optional<CookedArtifactFormatUVE> format = GetCookedArtifactFormatUVE(impl.renderDevice);
-    if (variant->compare("instanced") == 0 &&
-        !impl.renderDevice.GetCapabilitiesUVE().supportsStorageBuffers) {
-        // The named shadow variant reads SSBOs. GLES 3.0 and the current Android fallback
-        // deliberately report no storage-buffer capability, so selecting its ESSL 3.10 text
+    const RenderDeviceCapabilitiesUVE capabilities = impl.renderDevice.GetCapabilitiesUVE();
+    const bool requestsInstancing = variant->find("instanced") != std::string::npos;
+    if (requestsInstancing && !capabilities.supportsStorageBuffers) {
+        // The named instanced variants read SSBOs. GLES 3.0 and the current Android fallback
+        // deliberately report no storage-buffer capability, so selecting their ESSL 3.10 text
         // artifact would compile but bind nothing (BindStorageBufferUVE is a no-op there). Let
-        // the caller's ordinary source/fallback path choose the non-instanced shadow program.
+        // the caller's ordinary source/fallback path choose the non-instanced material.
+        return std::nullopt;
+    }
+    const bool requestsBindless = variant->find("bindless") != std::string::npos;
+    if (requestsBindless &&
+        !(capabilities.supportsBindlessResources && capabilities.supportsDescriptorIndexing &&
+          impl.renderDevice.GetBackendNameUVE().starts_with("Vulkan"))) {
+        // UVE_BINDLESS currently denotes Vulkan set-1 descriptors, not merely an arbitrary
+        // textual shader define. Do not consume a native variant on a device whose RHI cannot
+        // bind the corresponding table; the caller will use the deterministic fixed-slot path.
         return std::nullopt;
     }
     const char* const stageDirectory = ShaderArtifactStageDirectoryUVE(desc.stage);
@@ -524,7 +560,8 @@ void ShaderManagerUVE::SubmitSourceCompileJobUVE(ImplUVE& impl, const std::share
                 }
             } else {
                 const std::vector<std::pair<std::string, std::string>> defines =
-                    BuildDefinesUVE(desc.stage, impl.config.injectDebugDefineUVE, desc.extraDefines);
+                    BuildDefinesUVE(desc.stage, impl.config.injectDebugDefineUVE,
+                                     impl.renderDevice.GetBackendNameUVE().starts_with("Vulkan"), desc.extraDefines);
                 preprocess = Detail::PreprocessShaderSourceUVE(
                     impl.fileSystem, desc.virtualFilePath, desc.embeddedFallbackSourceCode, defines);
             }

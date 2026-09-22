@@ -136,6 +136,35 @@ if(UVE_BUILD_BUILTIN_SHADER_ARTIFACTS)
             "uve_shader_artifact_shadow_depth_instanced_${_uve_stage}")
     endforeach()
 
+    # Lit materials can opt into the native Vulkan descriptor-indexed sampled-texture array. Keep
+    # both axes explicit: a bindless request must never consume the ordinary or instanced artifact,
+    # and an instanced bindless request must carry the same storage-buffer interface as its source.
+    foreach(_uve_lit_variant IN ITEMS bindless instanced_bindless)
+        set(_uve_lit_variant_defines UVE_BINDLESS)
+        if(_uve_lit_variant STREQUAL "instanced_bindless")
+            set(_uve_lit_variant_defines UVE_INSTANCED UVE_BINDLESS)
+        endif()
+        foreach(_uve_stage IN ITEMS vert frag)
+            set(_uve_stage_define VERTEX_SHADER)
+            if(_uve_stage STREQUAL "frag")
+                set(_uve_stage_define FRAGMENT_SHADER)
+            endif()
+            uve_add_shader_artifacts(
+                "uve_shader_artifact_lit_shadowed_3d_${_uve_lit_variant}_${_uve_stage}"
+                SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/Engine/Runtime/RHI/Shader/built_in/lit_shadowed_3d.glsl"
+                STAGE ${_uve_stage}
+                TARGETS ${_uve_builtin_shader_targets}
+                DEFINES ${_uve_stage_define} ${_uve_lit_variant_defines}
+                TARGET_DEFINES
+                    vulkan=UVE_VULKAN
+                    android-vulkan=UVE_VULKAN
+                    gles=UVE_GLES
+                OUTPUT_DIRECTORY "${UVE_SHADER_ARTIFACT_DIRECTORY}/lit_shadowed_3d/${_uve_lit_variant}/${_uve_stage}")
+            list(APPEND _uve_builtin_shader_artifact_targets
+                "uve_shader_artifact_lit_shadowed_3d_${_uve_lit_variant}_${_uve_stage}")
+        endforeach()
+    endforeach()
+
     add_custom_target(uve_builtin_shader_artifacts)
     add_dependencies(uve_builtin_shader_artifacts ${_uve_builtin_shader_artifact_targets})
 endif()

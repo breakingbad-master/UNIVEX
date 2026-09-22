@@ -144,6 +144,22 @@ TEST(EditorRenderStatsUVETest, PlacementCacheMissingEveryFrameIsFlaggedButAnUnus
     EXPECT_NE(warm.value().value.find("100%"), std::string::npos) << "value was: " << warm.value().value;
 }
 
+TEST(EditorRenderStatsUVETest, MaterialBindingRowsExposeOptionalTierAndFallbackCounts) {
+    Render::Renderer3DFrameDiagnosticsUVE diagnostics{};
+    diagnostics.bindlessMaterialTierAvailable = true;
+    diagnostics.bindlessMaterialDrawsRecorded = 4U;
+    diagnostics.fixedSlotMaterialDrawsRecorded = 2U;
+    const std::vector<EditorRenderStatRowUVE> rows = BuildEditorRenderStatRowsUVE(diagnostics);
+
+    const std::optional<EditorRenderStatRowUVE> bindless = FindRowUVE(rows, "Bindless material draws");
+    ASSERT_TRUE(bindless.has_value());
+    EXPECT_NE(bindless.value().value.find("4"), std::string::npos);
+    EXPECT_NE(bindless.value().value.find("tier available"), std::string::npos);
+    const std::optional<EditorRenderStatRowUVE> fallback = FindRowUVE(rows, "Fixed-slot material draws");
+    ASSERT_TRUE(fallback.has_value());
+    EXPECT_EQ(fallback.value().value, "2");
+}
+
 TEST(EditorRenderStatsUVETest, AssetFailuresAreAlwaysFlagged) {
     // Unlike the performance rows, these are never a normal reading: a failed load means
     // something the scene references will not appear.

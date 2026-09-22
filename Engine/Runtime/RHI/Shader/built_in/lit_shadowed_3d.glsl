@@ -1,6 +1,12 @@
 #version 450 core
 
 #ifdef UVE_VULKAN
+#ifdef UVE_BINDLESS
+// UVE_BINDLESS_MATERIAL_CONTRACT: this shader opts into the native set-1 sampled-texture
+// array when the device advertises the optional descriptor-indexing tier. Low-tier devices use
+// the ordinary set-0 tuple descriptors below without changing the material source contract.
+#extension GL_EXT_nonuniform_qualifier : require
+#endif
 // Vulkan's frame/material values live in one std140 block so the renderer's existing named
 // SetUniform* calls update one dynamic-UBO shadow for both stages. The block deliberately keeps
 // the light array and cascade arrays: the Vulkan reflection layer flattens their members to the
@@ -30,6 +36,11 @@ layout(std140, set = 0, binding = 3) uniform UveLitShadowedFrameParameters {
     float uShadowCascadeSplits[3];
     int uShadowCascadeCount;
     float uShadowCascadeBlendRatio;
+#ifdef UVE_BINDLESS
+    int uAlbedoTextureIndex;
+    int uNormalTextureIndex;
+    int uAOTextureIndex;
+#endif
 } uveFrameParameters;
 #define uViewProjection uveFrameParameters.uViewProjection
 #define uLightSpaceMatrix uveFrameParameters.uLightSpaceMatrix
@@ -45,6 +56,11 @@ layout(std140, set = 0, binding = 3) uniform UveLitShadowedFrameParameters {
 #define uShadowCascadeSplits uveFrameParameters.uShadowCascadeSplits
 #define uShadowCascadeCount uveFrameParameters.uShadowCascadeCount
 #define uShadowCascadeBlendRatio uveFrameParameters.uShadowCascadeBlendRatio
+#ifdef UVE_BINDLESS
+#define uAlbedoTextureIndex uveFrameParameters.uAlbedoTextureIndex
+#define uNormalTextureIndex uveFrameParameters.uNormalTextureIndex
+#define uAOTextureIndex uveFrameParameters.uAOTextureIndex
+#endif
 
 #ifdef UVE_INSTANCED
 // The instance arrays are separate from the frame block so the same shader supports both the
@@ -72,9 +88,16 @@ layout(std140, set = 0, binding = 0) uniform UveLitShadowedObjectParameters {
 // Material texture slots 0..2 and shadow slots 3..5 map to descriptor bindings 4..9. The
 // Vulkan path uses individual shadow samplers because this RHI's bounded tuple descriptor
 // fallback intentionally supports one descriptor per reflected binding, not descriptor arrays.
+#ifdef UVE_BINDLESS
+// Material images move to the native descriptor-indexed set. Shadow maps remain in set 0 so the
+// existing per-frame shadow lifecycle and sampler layout stay deterministic on every tier.
+layout(set = 1, binding = 0) uniform sampler2D uveMaterialTextures[256];
+#define UVE_BINDLESS_INDEX(index) nonuniformEXT(uint(index))
+#else
 layout(set = 0, binding = 4) uniform sampler2D uAlbedoTexture;
 layout(set = 0, binding = 5) uniform sampler2D uNormalTexture;
 layout(set = 0, binding = 6) uniform sampler2D uAOTexture;
+#endif
 layout(set = 0, binding = 7) uniform sampler2D uShadowMapTexture0;
 layout(set = 0, binding = 8) uniform sampler2D uShadowMapTexture1;
 layout(set = 0, binding = 9) uniform sampler2D uShadowMapTexture2;
@@ -358,8 +381,13 @@ float DirectionalShadowFactorUVE(vec3 normal, vec3 lightDirection) {
 }
 
 void main() {
+#if defined(UVE_BINDLESS) && defined(UVE_VULKAN)
+    vec3 albedo = texture(uveMaterialTextures[UVE_BINDLESS_INDEX(uAlbedoTextureIndex)], vTexCoord).rgb * uAlbedoColor;
+    float ambientOcclusion = texture(uveMaterialTextures[UVE_BINDLESS_INDEX(uAOTextureIndex)], vTexCoord).r;
+#else
     vec3 albedo = texture(uAlbedoTexture, vTexCoord).rgb * uAlbedoColor;
     float ambientOcclusion = texture(uAOTexture, vTexCoord).r;
+#endif
     vec3 normal = SafeNormalizeUVE(vWorldNormal);
     vec3 tangent = vWorldTangent - normal * dot(normal, vWorldTangent);
     if (dot(tangent, tangent) <= 0.00000001) {
@@ -369,7 +397,11 @@ void main() {
     tangent = SafeNormalizeUVE(tangent);
     vec3 bitangent = SafeNormalizeUVE(cross(normal, tangent));
     bitangent *= vTangentHandedness < 0.0 ? -1.0 : 1.0;
+#if defined(UVE_BINDLESS) && defined(UVE_VULKAN)
+    vec3 tangentSpaceNormal = texture(uveMaterialTextures[UVE_BINDLESS_INDEX(uNormalTextureIndex)], vTexCoord).xyz * 2.0 - 1.0;
+#else
     vec3 tangentSpaceNormal = texture(uNormalTexture, vTexCoord).xyz * 2.0 - 1.0;
+#endif
     normal = SafeNormalizeUVE(mat3(tangent, bitangent, normal) * tangentSpaceNormal);
     vec3 viewDirection = SafeNormalizeUVE(uViewPosition - vWorldPosition);
     float metallic = clamp(uMetallic, 0.0, 1.0);

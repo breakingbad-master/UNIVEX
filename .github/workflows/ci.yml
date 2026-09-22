@@ -147,6 +147,36 @@ jobs:
                       f"shadow_depth/instanced/{stage}: GLES SSBO variant must be ESSL 3.10"
                   )
 
+          for variant, expected_defines in (
+              ("bindless", {"UVE_BINDLESS"}),
+              ("instanced_bindless", {"UVE_INSTANCED", "UVE_BINDLESS"}),
+          ):
+              for stage in ("vert", "frag"):
+                  root = Path("build/shaders") / "lit_shadowed_3d" / variant / stage
+                  manifest = json.loads((root / "shader_manifest.json").read_text(encoding="utf-8"))
+                  artifact = manifest["artifacts"][0]
+                  if manifest.get("format") != 3 or not isinstance(artifact.get("source_fnv1a64"), str):
+                      raise SystemExit(
+                          f"lit_shadowed_3d/{variant}/{stage}: runtime-verifiable manifest metadata is missing"
+                      )
+                  if set(artifact["defines"]) != ({"VERTEX_SHADER"} if stage == "vert" else {"FRAGMENT_SHADER"}) | expected_defines:
+                      raise SystemExit(
+                          f"lit_shadowed_3d/{variant}/{stage}: material variant defines are not recorded"
+                      )
+                  if artifact["target_defines"].get("vulkan") != ["UVE_VULKAN"]:
+                      raise SystemExit(
+                          f"lit_shadowed_3d/{variant}/{stage}: Vulkan target define is not recorded"
+                      )
+                  if artifact["target_defines"].get("gles") != ["UVE_GLES"]:
+                      raise SystemExit(
+                          f"lit_shadowed_3d/{variant}/{stage}: GLES target define is not recorded"
+                      )
+                  for target, artifact_path in artifact["artifacts"].items():
+                      if not Path(artifact_path).is_file() or Path(artifact_path).stat().st_size == 0:
+                          raise SystemExit(
+                              f"lit_shadowed_3d/{variant}/{stage}: missing/empty {target} artifact"
+                          )
+
           bindless_manifest = json.loads(
               (Path("build/shaders") / "bindless_probe" / "comp" / "shader_manifest.json").read_text(encoding="utf-8")
           )
@@ -164,6 +194,10 @@ jobs:
           PY
           spirv-cross build/shaders/bindless_probe/comp/bindless_probe.vulkan.spv --reflect \
             > build/shaders/bindless_probe/comp/bindless_probe.reflection.json
+          for variant in bindless instanced_bindless; do
+            spirv-cross "build/shaders/lit_shadowed_3d/${variant}/frag/lit_shadowed_3d.vulkan.spv" --reflect \
+              > "build/shaders/lit_shadowed_3d/${variant}/frag/lit_shadowed_3d.reflection.json"
+          done
           python3 - <<'PY'
           import json
           from pathlib import Path
@@ -188,6 +222,30 @@ jobs:
                   )
           print("Validated bindless reflection: set 1 sampled-image, storage-image, "
                 "and storage-buffer bindings 0, 1, and 2")
+
+          for variant in ("bindless", "instanced_bindless"):
+              reflection = json.loads(
+                  (Path("build/shaders") / "lit_shadowed_3d" / variant / "frag" /
+                   "lit_shadowed_3d.reflection.json").read_text(encoding="utf-8")
+              )
+              sampled_material_arrays = [
+                  resource for resource in reflection.get("textures", [])
+                  if resource.get("set") == 1 and resource.get("binding") == 0
+              ]
+              if not any(resource.get("array") == [256] for resource in sampled_material_arrays):
+                  raise SystemExit(
+                      f"lit_shadowed_3d/{variant}: set 1 binding 0 is not a 256-element sampled array"
+                  )
+              shadow_bindings = {
+                  resource.get("binding") for resource in reflection.get("textures", [])
+                  if resource.get("set") == 0
+              }
+              if not {7, 8, 9}.issubset(shadow_bindings):
+                  raise SystemExit(
+                      f"lit_shadowed_3d/{variant}: set 0 shadow bindings 7, 8, and 9 are missing"
+                  )
+          print("Validated production lit bindless reflection: sampled material array set 1/binding 0 "
+                "and fixed shadow bindings set 0/bindings 7-9")
           PY
 
       - name: Test

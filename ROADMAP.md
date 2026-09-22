@@ -252,10 +252,13 @@ publicly shipping real-time engines as of today, without naming any of them.
   backend supports source compilation. Format-3 manifests are checked at runtime for source
   fingerprint, stage, entry point, and target defines; requests with extra defines bypass mismatched
   cooked variants. Repository CI enables this target, validates Vulkan and OpenGL-semantics SPIR-V,
-  checks graphics, GLES, instancing, and target-policy manifests, and performs SPIRV-Cross JSON
-  reflection checks for the B1 set-1 bindings. Remaining: platform-native final compilation,
-  hardware validation, production materials consuming descriptor arrays, and broader runtime
-  artifact packaging; runtime source compilation remains the deterministic fallback where valid.
+  checks graphics, GLES, instancing, bindless lit variants, and target-policy manifests, and performs
+  SPIRV-Cross JSON reflection checks for the B1 set-1 bindings. The built-in lit material now has an
+  explicit, capability-gated `UVE_BINDLESS_MATERIAL_CONTRACT`: Vulkan binds its material textures
+  from set 1 while shadow samplers remain in set 0, and unsupported/exhausted devices retain the
+  fixed-slot path. Remaining: platform-native final compilation, hardware validation, generic
+  imported-material cooked artifact packaging, and broader runtime artifact packaging; runtime
+  source compilation remains the deterministic fallback where valid.
 - [~] GPU compute-shader support (for culling, particle simulation, skinning, etc. on the
   GPU instead of the CPU) — RHI level completed with M5a (compute pipelines, DispatchUVE,
   SSBO write path) and M5b (STORAGE_IMAGE descriptors, GENERAL transitions + image barriers,
@@ -332,11 +335,15 @@ publicly shipping real-time engines as of today, without naming any of them.
   set 0 and the existing tuple descriptors remain the fallback/migration path. The shared
   shader convention and artifact documentation are recorded in `Engine/Tools/SHADER_PIPELINE.md`.
   A Vulkan integration test now checks capability-gated slot publication, format restrictions,
-  destruction invalidation, and a construction-time forced fallback on the same driver. CI now
-  compiles and SPIR-V-validates the B1 fixture, reflects its set-1 bindings, runs the focused
-  Vulkan suite with `VK_LAYER_KHRONOS_validation`, and confirms the full test suite remains green.
-  Remaining evidence is production materials consuming descriptor arrays, capacity/performance
-  measurements, and native D3D12 descriptor heaps plus Metal argument buffers/mobile validation.
+  destruction invalidation, and a construction-time forced fallback on the same driver. The built-in
+  lit material path now consumes the sampled-texture array when Vulkan capability negotiation and
+  the explicit two-stage source marker both succeed; frame diagnostics report bindless versus
+  fixed-slot material draws. CI compiles and SPIR-V-validates the B1 fixture and lit bindless
+  variants, reflects their set-1 bindings, runs the focused Vulkan suite with
+  `VK_LAYER_KHRONOS_validation`, and confirms the full test suite remains green. Remaining evidence
+  is real-device material pixel validation, capacity/performance measurements, generic imported
+  material packaging, and native D3D12 descriptor heaps plus Metal argument buffers/mobile
+  validation.
 
 ---
 

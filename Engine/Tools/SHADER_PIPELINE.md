@@ -55,13 +55,14 @@ python3 Engine/Tools/compile_shaders.py \
 ```
 
 The cooked runtime layout mirrors the CMake output: `<mount>/<stem>/<stage>/<stem>.<target>.<ext>`
-for the base variant, and `<mount>/<stem>/<variant>/<stage>/<stem>.<target>.<ext>` for a named
-variant such as `instanced`. ShaderManagerUVE tries that path for a backend-native artifact and
-falls back to the authoring source when it is absent. Requests with additional per-material defines
-deliberately bypass a cooked artifact unless a matching variant is added, preventing a cached
-non-instanced shader from being used for an instanced material. The instanced GLES artifact is
-explicitly ESSL 3.10 because SSBOs do not exist in ES 3.0; the runtime must select the ordinary
-(non-instanced) fallback on an ES 3.0 device.
+for the base variant, and `<mount>/<stem>/<variant>/<stage>/<stem>.<target>.<ext>` for named
+variants such as `instanced`, `bindless`, and `instanced_bindless`. ShaderManagerUVE canonicalizes
+those two material axes and tries the matching path for a backend-native artifact; an unknown define
+set never reuses a different variant. It falls back to authoring source when the artifact is absent.
+The instanced GLES artifact is explicitly ESSL 3.10 because SSBOs do not exist in ES 3.0; the
+runtime must select the ordinary (non-instanced) fallback on an ES 3.0 device. `UVE_BINDLESS` is
+currently selected only for a Vulkan device that reports the native descriptor-indexing tier; every
+other backend/tier compiles the same material through the fixed-slot path.
 
 The compiler executables are intentionally discovered when the tool is invoked. A platform SDK
 is therefore required only for the targets that a developer or CI job requests. The shipped
@@ -102,6 +103,17 @@ D3D12/Metal implementations can map the same source-level convention onto a boun
 heap or argument buffer. Native color images use GENERAL as their descriptor rest layout so a
 storage-image index is valid without an untracked first-use transition. Destruction replaces
 entries with deterministic white/black/zero sinks before recycling a slot.
+
+The production lit material contract uses `UVE_BINDLESS_MATERIAL_CONTRACT` as an explicit source
+marker in both stages. When Vulkan capability negotiation succeeds, Renderer3DUVE injects
+`UVE_BINDLESS` into both stage descriptors, writes three sampled-texture indices into the reflected
+frame block (`uAlbedoTextureIndex`, `uNormalTextureIndex`, and `uAOTextureIndex`), and leaves the
+shadow samplers in set 0. A bindless draw therefore binds only the three shadow textures in logical
+set-0 slots 0..2 and samples material textures from set 1; a legacy or unsupported material keeps
+material slots 0..2 and shadow slots 3..5. If a native texture table is exhausted, the renderer
+resolves that material texture to the registered white/flat-normal fallback slot and continues
+without changing the shader contract. A material is never compiled into a native variant on a
+backend that cannot execute the corresponding descriptor layout.
 
 The non-Vulkan textual artifacts are a portability aid, not proof that every target has a native
 bindless implementation yet: generated HLSL/MSL still requires the target backend's final
