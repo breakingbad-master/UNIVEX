@@ -170,6 +170,7 @@ layout(set = 0, binding = 1) uniform sampler2D uSceneDepthTexture;
 layout(push_constant) uniform UveFullscreenQuadParameters {
     int uWriteCoverageAlpha;
 } uveParameters;
+#define uWriteCoverageAlpha uveParameters.uWriteCoverageAlpha
 #else
 uniform sampler2D uSourceTexture;
 // The scene depth this frame was rendered with, used only to report coverage. A caller that
