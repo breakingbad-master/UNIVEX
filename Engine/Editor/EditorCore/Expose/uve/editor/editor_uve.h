@@ -240,6 +240,14 @@ public:
     /// (DrawViewportPanelUVE()), then handed to ViewportPanelRendererUVE each frame so the
     /// concrete renderer can apply it to its own real projection/gizmo-mode/grid state. Kept as
     /// plain enums/bools with no viewport-module type in sight, for the same reason.
+    /// One axis colour as plain RGB in 0..1 - see ViewportOverlayStateUVE::axisColorX for why this
+    /// is a local struct rather than the viewport's own palette type.
+    struct ViewportAxisColorUVE final {
+        float r = 0.0F;
+        float g = 0.0F;
+        float b = 0.0F;
+    };
+
     struct ViewportOverlayStateUVE final {
         bool orthographic = false;
         ViewportGizmoModeUVE gizmoMode = ViewportGizmoModeUVE::Universal;
@@ -249,6 +257,46 @@ public:
         // renderer should hide editor-only overlays (grid, transform gizmo) in this mode, matching
         // Unity's own Scene/Game split, since Game is meant to preview what a player would see.
         bool gameWorkspaceActive = false;
+        // True while the pointer is over one of the overlay toolbar's own bubble buttons.
+        //
+        // The bubbles float on top of the rendered image inside the same ImGui window, so the
+        // renderer's IsWindowHovered() is equally true over a button and over the scene - which
+        // made clicking "Move" also register as a click on empty space and clear the selection.
+        // The renderer callback runs BEFORE the bubbles are submitted each frame, so it cannot ask
+        // ImGui directly; this carries the answer to it instead. It is therefore one frame old,
+        // which is imperceptible for a hover state and exact for every frame of a press.
+        bool pointerOverOverlay = false;
+
+        // The entity context toolbar (right-click an entity -> a small "Scripting" bubble anchored
+        // at its projected screen position). The world->screen projection needs OrbitCamera, which
+        // lives in Engine/Editor/Viewport - a module EditorCore may not depend on - so main.cpp
+        // computes the anchor pixel each frame and pushes it in via SetEntityContextToolbarAnchorUVE
+        // before RenderOverlayUVE runs that same frame; unlike gizmoMode/orthographic/etc above,
+        // this direction has no one-frame lag; entityContextToolbarOpen only goes false again
+        // through ClearEntityContextToolbarUVE (a miss) or DrawEntityContextToolbarUVE consuming a
+        // click, both driven by this same class.
+        bool entityContextToolbarOpen = false;
+        Scene::EntityUVE entityContextToolbarEntity = Scene::kInvalidEntityUVE;
+        float entityContextToolbarPixelX = 0.0F;
+        float entityContextToolbarPixelY = 0.0F;
+
+        // The author's chosen X/Y/Z axis colours, as RGB in 0..1.
+        //
+        // Deliberately plain float triples and not any Viewport-module palette type, for the same
+        // reason as everything else in this struct: EditorCore does not link the viewport, so the
+        // colour picker that edits these lives here while the renderer that applies them lives
+        // across the boundary. The viewport derives the grid's darker axis lines from these, so
+        // one choice moves both the gizmo and the grid.
+        //
+        // `axisColorsValid` starts false and the values start at zero ON PURPOSE. The default hues
+        // belong to the viewport's own AxisPalette, which this module may not include, so the host
+        // seeds them once at startup through SetViewportAxisColorsUVE. Until it does, the flag
+        // tells the renderer to keep its own defaults rather than apply three zeroes and paint
+        // every axis black.
+        ViewportAxisColorUVE axisColorX{};
+        ViewportAxisColorUVE axisColorY{};
+        ViewportAxisColorUVE axisColorZ{};
+        bool axisColorsValid = false;
     };
 
     /// Render callback for the dockable "Viewport" panel: given the panel's current available
@@ -351,6 +399,37 @@ public:
     /// entity. The command rejects as a whole if any proposed component is non-finite or below the
     /// positive scale floor; it never clamps individual components or performs proportional scaling.
     [[nodiscard]] bool ScaleSelectedUniformlyUVE(float localScaleOffset);
+
+    /// Begins one pointer-driven transform transaction on the selected entity, capturing the
+    /// baseline to preview from and to restore on cancel. A drag is not a sequence of commands:
+    /// every public transform command records history, so driving one from a drag would push an
+    /// undo entry per mouse-move frame. Returns false, leaving any existing session untouched,
+    /// for invalid editor state, multi-selection, or an entity with no transform.
+    [[nodiscard]] bool BeginTransformGestureUVE(EditorToolSessionModeUVE mode);
+
+    /// Applies the gesture's current value WITHOUT recording history. `totalAmount` is measured
+    /// from where the drag began, not from the previous frame - a drag reports its total offset
+    /// each frame, and treating it as an increment would compound into a runaway. The mode is the
+    /// one captured at Begin, so a tool switch mid-drag cannot reinterpret the gesture.
+    /// For Scale, EditorTransformAxisUVE::None means uniform.
+    [[nodiscard]] bool PreviewTransformGestureUVE(EditorTransformAxisUVE axis, float totalAmount);
+
+    /// The translate-gesture form that takes a full world-space delta rather than one axis, for a
+    /// plane handle - a drag in the XY plane moves along two axes at once, which no single-axis
+    /// call can express. Snapping quantises each component by the translate step, so a snapped
+    /// plane drag lands on the same lattice an axis drag would. Rejected unless the gesture in
+    /// flight is a Translate.
+    [[nodiscard]] bool PreviewTranslateGestureUVE(const Math::Vector3UVE& totalWorldDelta);
+
+    /// Ends the gesture and records exactly ONE history entry, baseline to final. A gesture that
+    /// never moved anything commits cleanly without an entry and without marking the scene dirty.
+    [[nodiscard]] bool CommitTransformGestureUVE();
+
+    /// Ends the gesture and restores the baseline. Returns false without restoring when the live
+    /// transform no longer matches this gesture's last preview - something else moved the entity,
+    /// and writing a stale baseline over it would silently discard that change
+    /// (EditorToolSessionOutcomeUVE::ExternalTransformConflict).
+    [[nodiscard]] bool CancelTransformGestureUVE();
 
     /// Replaces session-local snapping settings only when every increment is finite and strictly
     /// positive and no transform/navigation gesture is active. Returns false without mutation otherwise.
@@ -476,6 +555,32 @@ public:
     [[nodiscard]] bool RenameActiveVisualScriptBranchUVE(std::string name);
     [[nodiscard]] bool SaveVisualScriptWorkspaceUVE();
     [[nodiscard]] bool LoadVisualScriptWorkspaceUVE();
+    /// Resolves (creating on first use) the script branch owned by `entity` and switches the
+    /// active workspace to Scripting with that branch selected. Returns false if `entity` carries
+    /// no ScriptComponentUVE - the caller (the viewport's entity context toolbar) uses that to
+    /// decide whether to offer a "Scripting" action at all.
+    [[nodiscard]] bool OpenScriptGraphForEntityUVE(Scene::EntityUVE entity);
+    /// Arms the entity context toolbar (see ViewportOverlayStateUVE) at the given screen pixel for
+    /// `entity`. The caller (main.cpp, which owns viewport picking and the camera the pixel was
+    /// projected with) must call this before RenderOverlayUVE runs the same frame.
+    void SetEntityContextToolbarAnchorUVE(Scene::EntityUVE entity, float pixelX, float pixelY);
+    /// Closes the entity context toolbar (a right-click that missed every entity).
+    void ClearEntityContextToolbarUVE() noexcept;
+
+    /// The viewport's X/Y/Z axis colours, which the menu bar offers a picker for and the host
+    /// pushes into the real renderer each frame (see ViewportOverlayStateUVE::axisColorX).
+    ///
+    /// The host calls the setter once at startup to seed the viewport's own default palette -
+    /// this module cannot name those defaults itself - and thereafter whenever a persisted
+    /// choice is loaded. A channel outside 0..1, or not finite, is refused and nothing changes.
+    [[nodiscard]] bool SetViewportAxisColorsUVE(ViewportAxisColorUVE x, ViewportAxisColorUVE y,
+                                                ViewportAxisColorUVE z);
+    [[nodiscard]] bool AreViewportAxisColorsSetUVE() const noexcept;
+    [[nodiscard]] ViewportAxisColorUVE GetViewportAxisColorUVE(int axisIndex) const;
+    /// Forgets the author's choice, which makes the host re-seed its own default palette on the
+    /// next frame. Clearing rather than writing default values keeps those hues in the one module
+    /// that owns them instead of copying them into this one.
+    void ResetViewportAxisColorsUVE() noexcept;
 
     /// Releases editor-private UI resources and destroys the editor camera while the services are
     /// still alive. Idempotent after the first successful shutdown.
@@ -506,6 +611,11 @@ private:
     struct ScriptBranchUVE final {
         std::string name;
         std::unique_ptr<Scripting::ScriptGraphCanvasUVE> canvas;
+        /// The entity OpenScriptGraphForEntityUVE created this branch for, or kInvalidEntityUVE for
+        /// a branch made through the free-text branch UI (CreateVisualScriptBranchUVE directly).
+        /// Looked up by identity, never by name - a scriptAssetPath can contain '/' and therefore
+        /// can never be a valid branch name (see CreateVisualScriptBranchUVE's invalidName check).
+        Scene::EntityUVE ownerEntity = Scene::kInvalidEntityUVE;
     };
 
     struct PlayModeSessionUVE final {
@@ -715,6 +825,26 @@ private:
                                                             const Math::QuaternionUVE& initialLocalRotation,
                                                             const Math::Vector3UVE& worldAxis, float radians,
                                                             Math::QuaternionUVE& outLocalRotation) const;
+    /// The transform `source` becomes after one axis operation, including snapping and the
+    /// world-to-local conversion. Shared by the four public axis commands - which pass the LIVE
+    /// transform, making them incremental - and by the gesture preview path, which passes the
+    /// gesture BASELINE, making it absolute. One copy of the maths, so the two can never drift.
+    /// For Scale, EditorTransformAxisUVE::None means uniform; Translate and Rotate reject it.
+    [[nodiscard]] bool ComputeGestureTransformUVE(EditorToolSessionModeUVE mode,
+                                                   EditorTransformAxisUVE axis, float amount,
+                                                   const Scene::TransformComponentUVE& source,
+                                                   Scene::TransformComponentUVE& outTransform) const;
+    /// The translate half of ComputeGestureTransformUVE, taking the world delta directly. The
+    /// axis form is this with a delta of `axisVector * amount`.
+    [[nodiscard]] bool ComputeTranslatedTransformUVE(Scene::EntityUVE entity,
+                                                      const Math::Vector3UVE& worldDelta,
+                                                      const Scene::TransformComponentUVE& source,
+                                                      Scene::TransformComponentUVE& outTransform) const;
+    /// ComputeGestureTransformUVE against the selected entity's live transform, behind the guards
+    /// the four public commands share.
+    [[nodiscard]] bool TryComputeSelectedGestureTransformUVE(
+        EditorToolSessionModeUVE mode, EditorTransformAxisUVE axis, float amount,
+        Scene::TransformComponentUVE& outTransform) const;
     [[nodiscard]] bool ApplyLocalTransformUVE(Scene::EntityUVE entity,
                                                const Scene::TransformComponentUVE& transform);
     [[nodiscard]] bool ApplyEntityNameStateUVE(Scene::EntityUVE entity,
@@ -798,6 +928,8 @@ private:
     void DrawMenuBarUVE();
     void DrawViewportPanelUVE();
     void DrawViewportOverlayBubblesUVE(Math::Vector2UVE imageOrigin, Math::Vector2UVE imageSize);
+    void DrawEntityContextToolbarUVE(Math::Vector2UVE imageOrigin, Math::Vector2UVE imageSize);
+    void DrawViewportAxisColorPickerUVE();
     void DrawPluginWindowUVE();
     void DrawBottomDockUVE();
     void DrawBottomDockContentUVE();

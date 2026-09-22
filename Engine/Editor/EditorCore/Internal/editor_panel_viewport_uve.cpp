@@ -31,6 +31,8 @@
 #include "editor_fonts_uve.h"
 #include "editor_node_icons_uve.h"
 
+#include "uve/component/script_component_uve.h"
+
 namespace UVE::Editor {
 namespace {
 
@@ -201,6 +203,14 @@ void EditorUVE::DrawViewportPanelUVE() {
             if (!m_viewportOverlayState.gameWorkspaceActive) {
                 DrawViewportOverlayBubblesUVE(Math::Vector2UVE{cursorBeforeImage.x, cursorBeforeImage.y},
                                               Math::Vector2UVE{used.x, used.y});
+                DrawEntityContextToolbarUVE(Math::Vector2UVE{cursorBeforeImage.x, cursorBeforeImage.y},
+                                            Math::Vector2UVE{used.x, used.y});
+                // Every item submitted in this window this frame is an overlay bubble - the image
+                // above is not a hoverable item - so this is exactly "the pointer is on a button",
+                // which the renderer reads next frame to keep a toolbar click out of the scene.
+                m_viewportOverlayState.pointerOverOverlay = ImGui::IsAnyItemHovered();
+            } else {
+                m_viewportOverlayState.pointerOverOverlay = false;
             }
         }
     }
@@ -283,7 +293,16 @@ void EditorUVE::DrawViewportOverlayBubblesUVE(const Math::Vector2UVE imageOrigin
                     list.AddImage(static_cast<ImTextureID>(snapIconTextureId),
                                   ImVec2{center.x - half, center.y - half}, ImVec2{center.x + half, center.y + half});
                 })) {
-            m_viewportOverlayState.snapEnabled = !m_viewportOverlayState.snapEnabled;
+            // The bubble used to be inert: snapEnabled was written here and read only by the
+            // bubble's own highlight, so the button lit up and changed nothing. It is the editor's
+            // real snapping setting that decides whether a transform quantises, so route it there
+            // and keep the bubble reflecting what actually took effect - if the setting refuses
+            // the change (a gesture is in flight, say), the bubble must not claim otherwise.
+            EditorTransformSnappingSettingsUVE snapping = GetTransformSnappingSettingsUVE();
+            snapping.enabled = !m_viewportOverlayState.snapEnabled;
+            if (SetTransformSnappingSettingsUVE(snapping)) {
+                m_viewportOverlayState.snapEnabled = snapping.enabled;
+            }
         }
         ImGui::SameLine(0.0F, kBubbleSpacingUVE);
 
@@ -320,6 +339,121 @@ void EditorUVE::DrawViewportOverlayBubblesUVE(const Math::Vector2UVE imageOrigin
         if (pressed) {
             m_viewportOverlayState.orthographic = !m_viewportOverlayState.orthographic;
         }
+    }
+}
+
+void EditorUVE::SetEntityContextToolbarAnchorUVE(const Scene::EntityUVE entity, const float pixelX,
+                                                 const float pixelY) {
+    m_viewportOverlayState.entityContextToolbarOpen = true;
+    m_viewportOverlayState.entityContextToolbarEntity = entity;
+    m_viewportOverlayState.entityContextToolbarPixelX = pixelX;
+    m_viewportOverlayState.entityContextToolbarPixelY = pixelY;
+}
+
+void EditorUVE::ClearEntityContextToolbarUVE() noexcept {
+    m_viewportOverlayState.entityContextToolbarOpen = false;
+    m_viewportOverlayState.entityContextToolbarEntity = Scene::kInvalidEntityUVE;
+}
+
+namespace {
+
+[[nodiscard]] bool IsViewportAxisColorValidUVE(const EditorUVE::ViewportAxisColorUVE& color) {
+    const auto channelValid = [](const float channel) {
+        // NaN fails both comparisons, so it is refused here rather than surviving as a colour.
+        return channel >= 0.0F && channel <= 1.0F;
+    };
+    return channelValid(color.r) && channelValid(color.g) && channelValid(color.b);
+}
+
+} // namespace
+
+bool EditorUVE::SetViewportAxisColorsUVE(const ViewportAxisColorUVE x, const ViewportAxisColorUVE y,
+                                         const ViewportAxisColorUVE z) {
+    // All three or none: a half-applied palette would leave one axis in a colour the author never
+    // chose, which is worse than refusing the whole change.
+    if (!IsViewportAxisColorValidUVE(x) || !IsViewportAxisColorValidUVE(y) ||
+        !IsViewportAxisColorValidUVE(z)) {
+        return false;
+    }
+    m_viewportOverlayState.axisColorX = x;
+    m_viewportOverlayState.axisColorY = y;
+    m_viewportOverlayState.axisColorZ = z;
+    m_viewportOverlayState.axisColorsValid = true;
+    return true;
+}
+
+bool EditorUVE::AreViewportAxisColorsSetUVE() const noexcept {
+    return m_viewportOverlayState.axisColorsValid;
+}
+
+void EditorUVE::ResetViewportAxisColorsUVE() noexcept {
+    m_viewportOverlayState.axisColorsValid = false;
+    m_viewportOverlayState.axisColorX = ViewportAxisColorUVE{};
+    m_viewportOverlayState.axisColorY = ViewportAxisColorUVE{};
+    m_viewportOverlayState.axisColorZ = ViewportAxisColorUVE{};
+}
+
+EditorUVE::ViewportAxisColorUVE EditorUVE::GetViewportAxisColorUVE(const int axisIndex) const {
+    switch (axisIndex) {
+        case 0: return m_viewportOverlayState.axisColorX;
+        case 1: return m_viewportOverlayState.axisColorY;
+        case 2: return m_viewportOverlayState.axisColorZ;
+        default: return ViewportAxisColorUVE{};
+    }
+}
+
+// The right-click "Scripting" bubble, anchored at the entity's projected screen position rather
+// than the panel's own fixed corner (contrast DrawViewportOverlayBubblesUVE's gizmo/projection
+// bubbles above). Same InvisibleButton + manual ImDrawList paint idiom, not ImGui::BeginPopup -
+// a popup is a second ImGui window and would steal hover from camera orbit/pan exactly the way
+// pointerOverOverlay exists to prevent for viewport-anchored chrome (see its own doc comment).
+void EditorUVE::DrawEntityContextToolbarUVE(const Math::Vector2UVE imageOriginUVE,
+                                            const Math::Vector2UVE imageSizeUVE) {
+    if (!m_viewportOverlayState.entityContextToolbarOpen || m_services == nullptr) {
+        return;
+    }
+    const Scene::EntityUVE entity = m_viewportOverlayState.entityContextToolbarEntity;
+    Scene::IEntityManagerUVE& entityManager = m_services->GetEntityManagerUVE();
+    // The button offers nothing an entity can't use - no silent "add a Script component for you".
+    if (!entityManager.IsAliveUVE(entity) || !entityManager.HasComponentUVE<Scene::ScriptComponentUVE>(entity)) {
+        return;
+    }
+
+    const char* const kLabel = "Scripting";
+    const ImVec2 textSize = ImGui::CalcTextSize(kLabel);
+    constexpr float kPaddingXUVE = 8.0F;
+    constexpr float kPaddingYUVE = 5.0F;
+    const float pillWidth = textSize.x + kPaddingXUVE * 2.0F;
+    const float pillHeight = textSize.y + kPaddingYUVE * 2.0F;
+
+    // Anchor centered under the entity's projected pixel, clamped inside the rendered image so a
+    // point near an edge never draws the toolbar half off the panel.
+    const float anchorX = imageOriginUVE.x + m_viewportOverlayState.entityContextToolbarPixelX;
+    const float anchorY = imageOriginUVE.y + m_viewportOverlayState.entityContextToolbarPixelY;
+    const float minX = imageOriginUVE.x;
+    const float maxX = imageOriginUVE.x + imageSizeUVE.x - pillWidth;
+    const float minY = imageOriginUVE.y;
+    const float maxY = imageOriginUVE.y + imageSizeUVE.y - pillHeight;
+    const ImVec2 pillMin{std::clamp(anchorX - pillWidth * 0.5F, minX, std::max(minX, maxX)),
+                         std::clamp(anchorY + 12.0F, minY, std::max(minY, maxY))};
+    const ImVec2 pillMax{pillMin.x + pillWidth, pillMin.y + pillHeight};
+
+    ImGui::SetCursorScreenPos(pillMin);
+    ImGui::PushID("##viewport-entity-context-toolbar");
+    const bool pressed = ImGui::InvisibleButton("##scripting-pill", ImVec2{pillWidth, pillHeight});
+    const bool hovered = ImGui::IsItemHovered();
+    ImGui::PopID();
+
+    ImDrawList* const drawList = ImGui::GetWindowDrawList();
+    drawList->AddRectFilled(pillMin, pillMax, hovered ? IM_COL32(64, 132, 214, 235) : IM_COL32(18, 21, 28, 220),
+                            pillHeight * 0.5F);
+    drawList->AddRect(pillMin, pillMax, IM_COL32(255, 255, 255, 32), pillHeight * 0.5F);
+    drawList->AddText(ImVec2{pillMin.x + kPaddingXUVE, pillMin.y + kPaddingYUVE}, IM_COL32(240, 243, 248, 255),
+                      kLabel);
+
+    if (pressed) {
+        static_cast<void>(OpenScriptGraphForEntityUVE(entity));
+        m_viewportOverlayState.entityContextToolbarOpen = false;
     }
 }
 

@@ -26,6 +26,7 @@
 #include "uve/component/mesh_component_uve.h"
 #include "uve/component/name_component_uve.h"
 #include "uve/component/primitive_mesh_component_uve.h"
+#include "uve/component/script_component_uve.h"
 #include "uve/component/transform_component_uve.h"
 #include "uve/nodes/3d/marker_3d_uve.h"
 #include "uve/component/world_transform_component_uve.h"
@@ -138,6 +139,14 @@ struct EditorUVEAccessUVE final {
         const EditorUVE& editor) noexcept {
         return editor.m_scriptCompileInstructionCount;
     }
+
+    [[nodiscard]] static bool IsScriptingWorkspaceActiveUVE(const EditorUVE& editor) noexcept {
+        return editor.m_activeWorkspace == EditorUVE::EditorWorkspaceUVE::Scripting;
+    }
+
+    [[nodiscard]] static Scene::EntityUVE GetActiveVisualScriptBranchOwnerUVE(const EditorUVE& editor) noexcept {
+        return editor.m_visualScriptBranches[editor.m_activeVisualScriptBranch].ownerEntity;
+    }
 };
 
 namespace {
@@ -222,6 +231,124 @@ TEST(EditorUVETest, VisualScriptBranchesAreEditorOnlyAndPersisted) {
     }
     engine.Shutdown();
     std::filesystem::remove(scriptPath, error);
+}
+
+TEST(EditorUVETest, OpenScriptGraphForEntity_NoScriptComponent_ReturnsFalse) {
+    Core::EngineCoreUVE engine(MakeEditorTestConfigUVE());
+    engine.Init();
+    ASSERT_TRUE(engine.Load());
+    EditorUVE editor(engine.GetServicesUVE(), "uve_editor_tests_open_script_graph_none.uvescene");
+    editor.InitUVE();
+    Core::EngineServicesUVE& services = engine.GetServicesUVE();
+    Scene::IEntityManagerUVE& entityManager = services.GetEntityManagerUVE();
+
+    const Scene::EntityUVE entity = entityManager.CreateEntityUVE();
+    AttachRootUVE(engine, entity, Scene::TransformComponentUVE{});
+
+    EXPECT_FALSE(editor.OpenScriptGraphForEntityUVE(entity));
+    EXPECT_FALSE(EditorUVEAccessUVE::IsScriptingWorkspaceActiveUVE(editor));
+
+    editor.ShutdownUVE();
+    engine.Shutdown();
+}
+
+TEST(EditorUVETest, OpenScriptGraphForEntity_NoBranchYet_CreatesOneNamedFromAssetPath) {
+    Core::EngineCoreUVE engine(MakeEditorTestConfigUVE());
+    engine.Init();
+    ASSERT_TRUE(engine.Load());
+    EditorUVE editor(engine.GetServicesUVE(), "uve_editor_tests_open_script_graph_create.uvescene");
+    editor.InitUVE();
+    Core::EngineServicesUVE& services = engine.GetServicesUVE();
+    Scene::IEntityManagerUVE& entityManager = services.GetEntityManagerUVE();
+
+    const Scene::EntityUVE entity = entityManager.CreateEntityUVE();
+    AttachRootUVE(engine, entity, Scene::TransformComponentUVE{});
+    entityManager.AddComponentUVE<Scene::ScriptComponentUVE>(
+        entity, Scene::ScriptComponentUVE{"Scripts/Boss.scripting"});
+
+    ASSERT_TRUE(editor.OpenScriptGraphForEntityUVE(entity));
+    EXPECT_TRUE(EditorUVEAccessUVE::IsScriptingWorkspaceActiveUVE(editor));
+    // The raw path contains '/', which CreateVisualScriptBranchUVE would reject as a branch name -
+    // the branch name is sanitized, but lookup afterward is by owner entity, not by this name.
+    EXPECT_EQ(editor.GetActiveVisualScriptBranchNameUVE(), "Scripts_Boss.scripting");
+    EXPECT_EQ(EditorUVEAccessUVE::GetActiveVisualScriptBranchOwnerUVE(editor), entity);
+
+    editor.ShutdownUVE();
+    engine.Shutdown();
+}
+
+TEST(EditorUVETest, OpenScriptGraphForEntity_EmptyScriptAssetPath_NamesBranchFromEntityName) {
+    Core::EngineCoreUVE engine(MakeEditorTestConfigUVE());
+    engine.Init();
+    ASSERT_TRUE(engine.Load());
+    EditorUVE editor(engine.GetServicesUVE(), "uve_editor_tests_open_script_graph_empty_path.uvescene");
+    editor.InitUVE();
+    Core::EngineServicesUVE& services = engine.GetServicesUVE();
+    Scene::IEntityManagerUVE& entityManager = services.GetEntityManagerUVE();
+
+    const Scene::EntityUVE entity = entityManager.CreateEntityUVE();
+    AttachRootUVE(engine, entity, Scene::TransformComponentUVE{});
+    entityManager.AddComponentUVE<Scene::NameComponentUVE>(entity, Scene::NameComponentUVE{"Boss"});
+    entityManager.AddComponentUVE<Scene::ScriptComponentUVE>(entity, Scene::ScriptComponentUVE{});
+
+    ASSERT_TRUE(editor.OpenScriptGraphForEntityUVE(entity));
+    EXPECT_EQ(editor.GetActiveVisualScriptBranchNameUVE(), "Boss Script");
+
+    editor.ShutdownUVE();
+    engine.Shutdown();
+}
+
+TEST(EditorUVETest, OpenScriptGraphForEntity_NameCollision_DeduplicatesBranchName) {
+    Core::EngineCoreUVE engine(MakeEditorTestConfigUVE());
+    engine.Init();
+    ASSERT_TRUE(engine.Load());
+    EditorUVE editor(engine.GetServicesUVE(), "uve_editor_tests_open_script_graph_collision.uvescene");
+    editor.InitUVE();
+    Core::EngineServicesUVE& services = engine.GetServicesUVE();
+    Scene::IEntityManagerUVE& entityManager = services.GetEntityManagerUVE();
+
+    ASSERT_TRUE(editor.CreateVisualScriptBranchUVE("Boss Script"));
+    ASSERT_TRUE(editor.SelectVisualScriptBranchUVE("Type 1 Scene"));
+
+    const Scene::EntityUVE entity = entityManager.CreateEntityUVE();
+    AttachRootUVE(engine, entity, Scene::TransformComponentUVE{});
+    entityManager.AddComponentUVE<Scene::NameComponentUVE>(entity, Scene::NameComponentUVE{"Boss"});
+    entityManager.AddComponentUVE<Scene::ScriptComponentUVE>(entity, Scene::ScriptComponentUVE{});
+
+    ASSERT_TRUE(editor.OpenScriptGraphForEntityUVE(entity));
+    EXPECT_EQ(editor.GetActiveVisualScriptBranchNameUVE(), "Boss Script (2)");
+
+    editor.ShutdownUVE();
+    engine.Shutdown();
+}
+
+TEST(EditorUVETest, OpenScriptGraphForEntity_ExistingOwnedBranch_SelectsItWithoutCreatingAnother) {
+    Core::EngineCoreUVE engine(MakeEditorTestConfigUVE());
+    engine.Init();
+    ASSERT_TRUE(engine.Load());
+    EditorUVE editor(engine.GetServicesUVE(), "uve_editor_tests_open_script_graph_reopen.uvescene");
+    editor.InitUVE();
+    Core::EngineServicesUVE& services = engine.GetServicesUVE();
+    Scene::IEntityManagerUVE& entityManager = services.GetEntityManagerUVE();
+
+    const Scene::EntityUVE entity = entityManager.CreateEntityUVE();
+    AttachRootUVE(engine, entity, Scene::TransformComponentUVE{});
+    entityManager.AddComponentUVE<Scene::ScriptComponentUVE>(
+        entity, Scene::ScriptComponentUVE{"Scripts/Boss.scripting"});
+
+    ASSERT_TRUE(editor.OpenScriptGraphForEntityUVE(entity));
+    const std::size_t branchCountAfterFirstOpen = editor.GetVisualScriptBranchNamesUVE().size();
+    ASSERT_TRUE(editor.GetVisualScriptCanvasUVE().AddNodeTypeUVE("engine.log", {4.0F, 4.0F}).IsAppliedUVE());
+
+    ASSERT_TRUE(editor.SelectVisualScriptBranchUVE("Type 1 Scene"));
+    ASSERT_TRUE(editor.OpenScriptGraphForEntityUVE(entity));
+
+    EXPECT_EQ(editor.GetVisualScriptBranchNamesUVE().size(), branchCountAfterFirstOpen);
+    EXPECT_EQ(editor.GetActiveVisualScriptBranchNameUVE(), "Scripts_Boss.scripting");
+    EXPECT_EQ(editor.GetVisualScriptCanvasUVE().GetSnapshotUVE().nodes.size(), 1U);
+
+    editor.ShutdownUVE();
+    engine.Shutdown();
 }
 
 TEST(EditorUVETest, InitUVE_DoesNotCreateAutomaticPreviewLighting) {
@@ -776,6 +903,81 @@ TEST(EditorUVETest, SessionSettingsUVE_MigratesWithoutHiddenWriteAndPreservesDoc
         EXPECT_TRUE(settings.HasKeyUVE("editor.workspace.active"));
         EXPECT_FALSE(editor.IsSceneDirtyUVE());
         editor.ShutdownUVE();
+    }
+
+    engine.Shutdown();
+    std::filesystem::remove(config.settingsFilePath);
+}
+
+TEST(EditorUVETest, ViewportAxisColorsUVE_RefuseInvalidChannelsAndPersistAcrossSessionReload) {
+    const Core::EngineConfigUVE config = MakeEditorTestConfigUVE();
+    std::filesystem::remove(config.settingsFilePath);
+    Core::EngineCoreUVE engine(config);
+    engine.Init();
+    ASSERT_TRUE(engine.Load());
+
+    using AxisColorUVE = EditorUVE::ViewportAxisColorUVE;
+    const AxisColorUVE chosenX{0.90F, 0.10F, 0.40F};
+    const AxisColorUVE chosenY{0.20F, 0.80F, 0.30F};
+    const AxisColorUVE chosenZ{0.15F, 0.45F, 0.95F};
+
+    {
+        EditorUVE editor(engine.GetServicesUVE(), "uve_editor_tests_axis_colors.uvescene");
+        editor.InitUVE();
+
+        // Nothing is seeded until the host - which owns the viewport's default hues - supplies
+        // them, so the editor must say so rather than report three zeroes as a chosen palette.
+        EXPECT_FALSE(editor.AreViewportAxisColorsSetUVE());
+
+        // All three or none: one bad channel must not leave a partially applied palette.
+        EXPECT_FALSE(editor.SetViewportAxisColorsUVE(AxisColorUVE{1.5F, 0.0F, 0.0F}, chosenY, chosenZ))
+            << "a channel above 1 must be refused";
+        EXPECT_FALSE(editor.SetViewportAxisColorsUVE(chosenX, AxisColorUVE{0.0F, -0.3F, 0.0F}, chosenZ))
+            << "a negative channel must be refused";
+        EXPECT_FALSE(editor.SetViewportAxisColorsUVE(
+            chosenX, chosenY, AxisColorUVE{0.0F, 0.0F, std::numeric_limits<float>::quiet_NaN()}))
+            << "NaN must be refused, not compared its way through";
+        EXPECT_FALSE(editor.AreViewportAxisColorsSetUVE())
+            << "a refused palette must leave the state untouched, not half-written";
+
+        ASSERT_TRUE(editor.SetViewportAxisColorsUVE(chosenX, chosenY, chosenZ));
+        EXPECT_TRUE(editor.AreViewportAxisColorsSetUVE());
+        EXPECT_FLOAT_EQ(editor.GetViewportAxisColorUVE(0).r, chosenX.r);
+        EXPECT_FLOAT_EQ(editor.GetViewportAxisColorUVE(1).g, chosenY.g);
+        EXPECT_FLOAT_EQ(editor.GetViewportAxisColorUVE(2).b, chosenZ.b);
+
+        ASSERT_TRUE(EditorUVEAccessUVE::SaveSessionSettingsUVE(editor));
+        editor.ShutdownUVE();
+    }
+    {
+        EditorUVE reloaded(engine.GetServicesUVE(), "uve_editor_tests_axis_colors_reload.uvescene");
+        reloaded.InitUVE();
+        ASSERT_TRUE(reloaded.AreViewportAxisColorsSetUVE())
+            << "a saved palette must survive LoadSessionSettingsUVE on the next InitUVE()";
+        EXPECT_FLOAT_EQ(reloaded.GetViewportAxisColorUVE(0).r, chosenX.r);
+        EXPECT_FLOAT_EQ(reloaded.GetViewportAxisColorUVE(0).g, chosenX.g);
+        EXPECT_FLOAT_EQ(reloaded.GetViewportAxisColorUVE(1).g, chosenY.g);
+        EXPECT_FLOAT_EQ(reloaded.GetViewportAxisColorUVE(2).b, chosenZ.b);
+
+        // Reset drops the choice so the host re-seeds its own defaults; it must not write
+        // default-looking values here, which would make this module a second home for them.
+        reloaded.ResetViewportAxisColorsUVE();
+        EXPECT_FALSE(reloaded.AreViewportAxisColorsSetUVE());
+        reloaded.ShutdownUVE();
+    }
+    {
+        // A corrupt settings file must cost the colour choice, not produce a viewport drawing
+        // axes in a colour nobody picked.
+        Config::IConfigManagerUVE& settings = engine.GetServicesUVE().GetConfigManagerUVE();
+        settings.SetBoolUVE("editor.viewport.axisColors.set", true);
+        settings.SetDoubleUVE("editor.viewport.axisColors.x.r", 7.5);
+        ASSERT_TRUE(settings.SaveUVE());
+
+        EditorUVE corrupt(engine.GetServicesUVE(), "uve_editor_tests_axis_colors_corrupt.uvescene");
+        corrupt.InitUVE();
+        EXPECT_FALSE(corrupt.AreViewportAxisColorsSetUVE())
+            << "an out-of-range persisted channel must fall back to unset, not be clamped in";
+        corrupt.ShutdownUVE();
     }
 
     engine.Shutdown();
@@ -3149,7 +3351,242 @@ TEST(EditorUVETest, VisualScriptSearchInsertionPreservesPositionAndCompilerUsesN
     engine.Shutdown();
 }
 
+
+
+// ---------------------------------------------------------------------------------------------
+// Transform gestures.
+//
+// A pointer drag is one transaction, not a stream of commands. These pin the properties that
+// distinguish the two - a single undo step per drag, previews measured from where the drag began,
+// and a cancel that refuses to write a stale baseline over someone else's change.
+// ---------------------------------------------------------------------------------------------
+
+/// One selected root entity ready to be dragged, with `editor` already pointing at it.
+[[nodiscard]] Scene::EntityUVE SelectFreshRootUVE(Core::EngineCoreUVE& engine, EditorUVE& editor,
+                                                  const Math::Vector3UVE position) {
+    Scene::IEntityManagerUVE& entityManager = engine.GetServicesUVE().GetEntityManagerUVE();
+    const Scene::EntityUVE entity = entityManager.CreateEntityUVE();
+    Scene::TransformComponentUVE transform{};
+    transform.localPosition = position;
+    AttachRootUVE(engine, entity, transform);
+    engine.GetServicesUVE().GetSceneGraphUVE().UpdateUVE(entityManager);
+    editor.SelectEntityUVE(entity);
+    return entity;
+}
+
+TEST(EditorUVETest, TransformGesture_ManyPreviewsCollapseIntoExactlyOneUndoStep) {
+    Core::EngineCoreUVE engine(MakeEditorTestConfigUVE());
+    engine.Init();
+    ASSERT_TRUE(engine.Load());
+    {
+        EditorUVE editor(engine.GetServicesUVE(), "uve_editor_tests_gesture_commit.uvescene");
+        editor.InitUVE();
+        Scene::IEntityManagerUVE& entityManager = engine.GetServicesUVE().GetEntityManagerUVE();
+        const Scene::EntityUVE entity = SelectFreshRootUVE(engine, editor, Math::Vector3UVE{});
+
+        ASSERT_TRUE(editor.BeginTransformGestureUVE(EditorToolSessionModeUVE::Translate));
+        EXPECT_EQ(editor.GetToolSessionPhaseUVE(), EditorToolSessionPhaseUVE::Previewing);
+
+        // A drag reports its TOTAL offset each frame. Feeding 1, 2, ... 10 must land on 10, not on
+        // their sum - that difference is the whole reason previews run off the baseline.
+        for (int step = 1; step <= 10; ++step) {
+            ASSERT_TRUE(editor.PreviewTransformGestureUVE(EditorTransformAxisUVE::X,
+                                                          static_cast<float>(step)));
+        }
+        EXPECT_NEAR(entityManager.GetComponentUVE<Scene::TransformComponentUVE>(entity).localPosition.x,
+                    10.0F, 0.0001F);
+
+        ASSERT_TRUE(editor.CommitTransformGestureUVE());
+        EXPECT_EQ(editor.GetToolSessionPhaseUVE(), EditorToolSessionPhaseUVE::Idle);
+        EXPECT_EQ(editor.GetLastToolSessionOutcomeUVE(), EditorToolSessionOutcomeUVE::Committed);
+
+        // Ten previews, one undo step: straight back to the start, and nothing left to undo after.
+        ASSERT_TRUE(editor.UndoUVE());
+        EXPECT_NEAR(entityManager.GetComponentUVE<Scene::TransformComponentUVE>(entity).localPosition.x,
+                    0.0F, 0.0001F);
+        EXPECT_FALSE(editor.UndoUVE());
+
+        ASSERT_TRUE(editor.RedoUVE());
+        EXPECT_NEAR(entityManager.GetComponentUVE<Scene::TransformComponentUVE>(entity).localPosition.x,
+                    10.0F, 0.0001F);
+
+        editor.ShutdownUVE();
+    }
+    engine.Shutdown();
+}
+
+TEST(EditorUVETest, TransformGesture_CancelRestoresTheBaselineAndLeavesNoHistory) {
+    Core::EngineCoreUVE engine(MakeEditorTestConfigUVE());
+    engine.Init();
+    ASSERT_TRUE(engine.Load());
+    {
+        EditorUVE editor(engine.GetServicesUVE(), "uve_editor_tests_gesture_cancel.uvescene");
+        editor.InitUVE();
+        Scene::IEntityManagerUVE& entityManager = engine.GetServicesUVE().GetEntityManagerUVE();
+        const Scene::EntityUVE entity =
+            SelectFreshRootUVE(engine, editor, Math::Vector3UVE{3.0F, 0.0F, 0.0F});
+        const bool dirtyBeforeGesture = editor.IsSceneDirtyUVE();
+
+        ASSERT_TRUE(editor.BeginTransformGestureUVE(EditorToolSessionModeUVE::Translate));
+        ASSERT_TRUE(editor.PreviewTransformGestureUVE(EditorTransformAxisUVE::X, 25.0F));
+        EXPECT_NEAR(entityManager.GetComponentUVE<Scene::TransformComponentUVE>(entity).localPosition.x,
+                    28.0F, 0.0001F);
+
+        ASSERT_TRUE(editor.CancelTransformGestureUVE());
+        EXPECT_EQ(editor.GetLastToolSessionOutcomeUVE(), EditorToolSessionOutcomeUVE::Cancelled);
+        EXPECT_NEAR(entityManager.GetComponentUVE<Scene::TransformComponentUVE>(entity).localPosition.x,
+                    3.0F, 0.0001F);
+        // An abandoned drag must not leave the document looking modified, or the user is prompted
+        // to save a change they explicitly threw away.
+        EXPECT_EQ(editor.IsSceneDirtyUVE(), dirtyBeforeGesture);
+        EXPECT_FALSE(editor.UndoUVE());
+
+        editor.ShutdownUVE();
+    }
+    engine.Shutdown();
+}
+
+TEST(EditorUVETest, TransformGesture_CancelRefusesToOverwriteAnExternalChange) {
+    Core::EngineCoreUVE engine(MakeEditorTestConfigUVE());
+    engine.Init();
+    ASSERT_TRUE(engine.Load());
+    {
+        EditorUVE editor(engine.GetServicesUVE(), "uve_editor_tests_gesture_conflict.uvescene");
+        editor.InitUVE();
+        Scene::IEntityManagerUVE& entityManager = engine.GetServicesUVE().GetEntityManagerUVE();
+        const Scene::EntityUVE entity = SelectFreshRootUVE(engine, editor, Math::Vector3UVE{});
+
+        ASSERT_TRUE(editor.BeginTransformGestureUVE(EditorToolSessionModeUVE::Translate));
+        ASSERT_TRUE(editor.PreviewTransformGestureUVE(EditorTransformAxisUVE::X, 5.0F));
+
+        // Something other than this gesture moves the entity - another tool, a script, the
+        // runtime. The baseline is now stale.
+        Scene::TransformComponentUVE external{};
+        external.localPosition = Math::Vector3UVE{-99.0F, 0.0F, 0.0F};
+        ASSERT_TRUE(editor.SetSelectedLocalTransformUVE(external));
+
+        // Cancel must decline rather than silently restore over that change.
+        EXPECT_FALSE(editor.CancelTransformGestureUVE());
+        EXPECT_EQ(editor.GetLastToolSessionOutcomeUVE(),
+                  EditorToolSessionOutcomeUVE::ExternalTransformConflict);
+        EXPECT_NEAR(entityManager.GetComponentUVE<Scene::TransformComponentUVE>(entity).localPosition.x,
+                    -99.0F, 0.0001F);
+        EXPECT_EQ(editor.GetToolSessionPhaseUVE(), EditorToolSessionPhaseUVE::Idle);
+
+        editor.ShutdownUVE();
+    }
+    engine.Shutdown();
+}
+
+TEST(EditorUVETest, TransformGesture_RejectsMultiSelectionAndOutOfOrderCalls) {
+    Core::EngineCoreUVE engine(MakeEditorTestConfigUVE());
+    engine.Init();
+    ASSERT_TRUE(engine.Load());
+    {
+        EditorUVE editor(engine.GetServicesUVE(), "uve_editor_tests_gesture_guards.uvescene");
+        editor.InitUVE();
+
+        // Nothing is in flight, so preview/commit/cancel have nothing to act on.
+        EXPECT_FALSE(editor.PreviewTransformGestureUVE(EditorTransformAxisUVE::X, 1.0F));
+        EXPECT_FALSE(editor.CommitTransformGestureUVE());
+        EXPECT_FALSE(editor.CancelTransformGestureUVE());
+
+        const Scene::EntityUVE first = SelectFreshRootUVE(engine, editor, Math::Vector3UVE{});
+        const Scene::EntityUVE second =
+            SelectFreshRootUVE(engine, editor, Math::Vector3UVE{5.0F, 0.0F, 0.0F});
+        ASSERT_NE(first, second);
+
+        // Two entities selected: a transform gesture has no single pivot to act on, matching the
+        // existing single-selection rule the four axis commands already enforce.
+        editor.SelectEntityUVE(first);
+        editor.ToggleEntitySelectionUVE(second);
+        EXPECT_FALSE(editor.BeginTransformGestureUVE(EditorToolSessionModeUVE::Translate));
+
+        // Back to one, and a re-entrant Begin is refused without disturbing the live session.
+        editor.SelectEntityUVE(first);
+        ASSERT_TRUE(editor.BeginTransformGestureUVE(EditorToolSessionModeUVE::Scale));
+        EXPECT_FALSE(editor.BeginTransformGestureUVE(EditorToolSessionModeUVE::Rotate));
+        EXPECT_EQ(editor.GetToolSessionPhaseUVE(), EditorToolSessionPhaseUVE::Previewing);
+
+        // The mode captured at Begin is the one that applies, so this previews a SCALE even though
+        // a rotate Begin was attempted in between.
+        ASSERT_TRUE(editor.PreviewTransformGestureUVE(EditorTransformAxisUVE::Y, 1.5F));
+        Scene::IEntityManagerUVE& entityManager = engine.GetServicesUVE().GetEntityManagerUVE();
+        EXPECT_NEAR(entityManager.GetComponentUVE<Scene::TransformComponentUVE>(first).localScale.y,
+                    2.5F, 0.0001F);
+
+        // The scale floor still rejects, and a rejected preview leaves the last good one standing.
+        EXPECT_FALSE(editor.PreviewTransformGestureUVE(EditorTransformAxisUVE::Y, -50.0F));
+        EXPECT_NEAR(entityManager.GetComponentUVE<Scene::TransformComponentUVE>(first).localScale.y,
+                    2.5F, 0.0001F);
+        ASSERT_TRUE(editor.CancelTransformGestureUVE());
+
+        editor.ShutdownUVE();
+    }
+    engine.Shutdown();
+}
+
+TEST(EditorUVETest, TransformGesture_NoOpDragCommitsWithoutHistoryOrDirtyingTheScene) {
+    Core::EngineCoreUVE engine(MakeEditorTestConfigUVE());
+    engine.Init();
+    ASSERT_TRUE(engine.Load());
+    {
+        EditorUVE editor(engine.GetServicesUVE(), "uve_editor_tests_gesture_noop.uvescene");
+        editor.InitUVE();
+        static_cast<void>(SelectFreshRootUVE(engine, editor, Math::Vector3UVE{}));
+        const bool dirtyBeforeGesture = editor.IsSceneDirtyUVE();
+
+        ASSERT_TRUE(editor.BeginTransformGestureUVE(EditorToolSessionModeUVE::Translate));
+        ASSERT_TRUE(editor.PreviewTransformGestureUVE(EditorTransformAxisUVE::X, 0.0F));
+        ASSERT_TRUE(editor.CommitTransformGestureUVE());
+
+        EXPECT_EQ(editor.GetLastToolSessionOutcomeUVE(),
+                  EditorToolSessionOutcomeUVE::CompletedWithoutChange);
+        EXPECT_EQ(editor.IsSceneDirtyUVE(), dirtyBeforeGesture);
+        EXPECT_FALSE(editor.UndoUVE());
+
+        editor.ShutdownUVE();
+    }
+    engine.Shutdown();
+}
+
+// Snapping must mean the same thing on both paths, or a drag with Snap on would quantise
+// differently from the keyboard command that nominally does the same operation.
+TEST(EditorUVETest, TransformGesture_SnappingQuantisesIdenticallyToTheEquivalentCommand) {
+    Core::EngineCoreUVE engine(MakeEditorTestConfigUVE());
+    engine.Init();
+    ASSERT_TRUE(engine.Load());
+    {
+        EditorUVE editor(engine.GetServicesUVE(), "uve_editor_tests_gesture_snap.uvescene");
+        editor.InitUVE();
+        Scene::IEntityManagerUVE& entityManager = engine.GetServicesUVE().GetEntityManagerUVE();
+
+        EditorTransformSnappingSettingsUVE snapping{};
+        snapping.enabled = true;
+        snapping.translateStep = 0.5F;
+        ASSERT_TRUE(editor.SetTransformSnappingSettingsUVE(snapping));
+
+        const Scene::EntityUVE viaCommand = SelectFreshRootUVE(engine, editor, Math::Vector3UVE{});
+        ASSERT_TRUE(editor.TranslateSelectedAlongAxisUVE(EditorTransformAxisUVE::X, 1.31F));
+        const float commandResult =
+            entityManager.GetComponentUVE<Scene::TransformComponentUVE>(viaCommand).localPosition.x;
+
+        static_cast<void>(SelectFreshRootUVE(engine, editor, Math::Vector3UVE{}));
+        ASSERT_TRUE(editor.BeginTransformGestureUVE(EditorToolSessionModeUVE::Translate));
+        ASSERT_TRUE(editor.PreviewTransformGestureUVE(EditorTransformAxisUVE::X, 1.31F));
+        ASSERT_TRUE(editor.CommitTransformGestureUVE());
+        const float gestureResult = entityManager
+                                        .GetComponentUVE<Scene::TransformComponentUVE>(
+                                            editor.GetSelectedEntityUVE())
+                                        .localPosition.x;
+
+        EXPECT_NEAR(gestureResult, commandResult, 1e-6F);
+        EXPECT_NEAR(gestureResult, 1.5F, 1e-6F);
+
+        editor.ShutdownUVE();
+    }
+    engine.Shutdown();
+}
+
 } // namespace
 } // namespace UVE::Editor::Tests
-
-
