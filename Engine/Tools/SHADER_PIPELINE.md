@@ -37,7 +37,8 @@ python3 Engine/Tools/compile_shaders.py \
   --target gles \
   --target d3d12 \
   --target metal \
-  --out-dir build/shaders/frustum_cull
+  --define COMPUTE_SHADER \
+  --out-dir build/shaders/frustum_cull/comp
 ```
 
 A source that has backend-specific layout policy can compile those variants from one file. The

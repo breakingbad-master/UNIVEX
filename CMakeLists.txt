@@ -42,6 +42,9 @@ if(UVE_BUILD_BUILTIN_SHADER_ARTIFACTS)
         metal
         ios)
     set(_uve_builtin_shader_artifact_targets)
+    # ShaderManagerUVE addresses compute artifacts under <stem>/comp and validates the
+    # stage define from the manifest, so keep both pieces explicit here rather than relying on
+    # the tool's generic stage argument alone.
     foreach(_uve_shader IN ITEMS
         bindless_probe
         frustum_cull
@@ -53,11 +56,12 @@ if(UVE_BUILD_BUILTIN_SHADER_ARTIFACTS)
             SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/Engine/Runtime/RHI/Shader/built_in/${_uve_shader}.glsl"
             STAGE comp
             TARGETS ${_uve_builtin_shader_targets}
+            DEFINES COMPUTE_SHADER
             TARGET_DEFINES
                 vulkan=UVE_VULKAN
                 android-vulkan=UVE_VULKAN
                 gles=UVE_GLES
-            OUTPUT_DIRECTORY "${UVE_SHADER_ARTIFACT_DIRECTORY}/${_uve_shader}")
+            OUTPUT_DIRECTORY "${UVE_SHADER_ARTIFACT_DIRECTORY}/${_uve_shader}/comp")
         list(APPEND _uve_builtin_shader_artifact_targets "uve_shader_artifact_${_uve_shader}")
     endforeach()
 

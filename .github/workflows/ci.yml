@@ -89,6 +89,24 @@ jobs:
           from pathlib import Path
 
           for stem in (
+              "bindless_probe", "frustum_cull", "frustum_cull_indirect", "mesh_skin", "particle_simulate"
+          ):
+              root = Path("build/shaders") / stem / "comp"
+              manifest = json.loads((root / "shader_manifest.json").read_text(encoding="utf-8"))
+              artifact = manifest["artifacts"][0]
+              if manifest.get("format") != 3 or not isinstance(artifact.get("source_fnv1a64"), str):
+                  raise SystemExit(f"{stem}/comp: runtime-verifiable manifest metadata is missing")
+              if artifact.get("defines") != ["COMPUTE_SHADER"]:
+                  raise SystemExit(f"{stem}/comp: compute stage define is not recorded")
+              if artifact["target_defines"].get("vulkan") != ["UVE_VULKAN"]:
+                  raise SystemExit(f"{stem}/comp: Vulkan target define is not recorded")
+              if artifact["target_defines"].get("gles") != ["UVE_GLES"]:
+                  raise SystemExit(f"{stem}/comp: GLES target define is not recorded")
+              for target, artifact_path in artifact["artifacts"].items():
+                  if not Path(artifact_path).is_file() or Path(artifact_path).stat().st_size == 0:
+                      raise SystemExit(f"{stem}/comp: missing/empty {target} artifact")
+
+          for stem in (
               "basic_2d", "basic_3d", "basic_3d_textured", "particle", "shadow_depth", "lit_shadowed_3d",
               "fullscreen_quad", "fullscreen_copy", "bloom_bright_pass", "bloom_blur", "ssao", "ui_overlay"
           ):
@@ -130,7 +148,7 @@ jobs:
                   )
 
           bindless_manifest = json.loads(
-              (Path("build/shaders") / "bindless_probe" / "shader_manifest.json").read_text(encoding="utf-8")
+              (Path("build/shaders") / "bindless_probe" / "comp" / "shader_manifest.json").read_text(encoding="utf-8")
           )
           bindless_artifact = bindless_manifest["artifacts"][0]
           if bindless_manifest.get("format") != 3 or not isinstance(bindless_artifact.get("source_fnv1a64"), str):
@@ -144,13 +162,13 @@ jobs:
               raise SystemExit("bindless_probe: GLES smoke artifact is not ESSL 3.10")
           print("Validated cooked graphics stage artifacts, instanced shadow variants, bindless GLES fallback, and target policy manifests")
           PY
-          spirv-cross build/shaders/bindless_probe/bindless_probe.vulkan.spv --reflect \
-            > build/shaders/bindless_probe/bindless_probe.reflection.json
+          spirv-cross build/shaders/bindless_probe/comp/bindless_probe.vulkan.spv --reflect \
+            > build/shaders/bindless_probe/comp/bindless_probe.reflection.json
           python3 - <<'PY'
           import json
           from pathlib import Path
 
-          reflection_path = Path("build/shaders/bindless_probe/bindless_probe.reflection.json")
+          reflection_path = Path("build/shaders/bindless_probe/comp/bindless_probe.reflection.json")
           reflection = json.loads(reflection_path.read_text(encoding="utf-8"))
           expected = {
               "textures": (1, 0),
