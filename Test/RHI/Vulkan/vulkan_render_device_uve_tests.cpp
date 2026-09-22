@@ -22,8 +22,12 @@
 #include <array>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <thread>
 #include <type_traits>
@@ -47,6 +51,32 @@ namespace {
     // Vulkan ignores the GL hint fields entirely — WindowManagerUVE only uses them for the
     // GL context-creation path — but defaulting them keeps the desc unambiguous to readers.
     return desc;
+}
+
+[[nodiscard]] std::optional<std::string> ReadBindlessMaterialProbeArtifactUVE(
+    const std::string_view stageDirectory) {
+    const std::filesystem::path relativePath =
+        std::filesystem::path("shaders") / "bindless_material_probe" / std::string(stageDirectory) /
+        (std::string("bindless_material_probe.vulkan.spv"));
+    // CTest normally runs from the build root, while a developer may invoke this executable from
+    // build/Test. Accept both without falling back to a source-tree copy: the test must prove the
+    // exact artifact produced by the configured offline shader target.
+    const std::array<std::filesystem::path, 3> candidates = {
+        std::filesystem::current_path() / relativePath,
+        std::filesystem::current_path().parent_path() / relativePath,
+        std::filesystem::current_path().parent_path().parent_path() / relativePath,
+    };
+    for (const std::filesystem::path& candidate : candidates) {
+        std::ifstream input(candidate, std::ios::binary);
+        if (!input.is_open()) {
+            continue;
+        }
+        std::string bytes{std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
+        if (!bytes.empty()) {
+            return bytes;
+        }
+    }
+    return std::nullopt;
 }
 
 } // namespace
@@ -3610,6 +3640,144 @@ TEST_F(VulkanRenderDeviceUVETest, BindlessCapabilityAndResourcePublicationAreCon
               kInvalidBindlessResourceSlotUVE);
     EXPECT_EQ(device->GetBindlessStorageBufferSlotUVE(storageBuffer),
               kInvalidBindlessResourceSlotUVE);
+}
+
+TEST_F(VulkanRenderDeviceUVETest, NativeBindlessMaterialProbeSelectsPublishedTextureAtPixel) {
+    // B1 real-draw proof: use the same fixed set-1 sampled-texture array contract as the
+    // production material variant, publish two real RGBA8 textures through the native table,
+    // and select each one from a push-constant index. This intentionally bypasses BindTextureUVE:
+    // a successful pixel change proves the descriptor-array publication path, non-uniform index,
+    // and native set binding all work together rather than merely reporting valid slots.
+    const RenderDeviceCapabilitiesUVE capabilities = device->GetCapabilitiesUVE();
+    if (!(capabilities.supportsBindlessResources && capabilities.supportsDescriptorIndexing)) {
+        GTEST_SKIP() << "Vulkan device does not expose the optional native bindless material tier";
+    }
+
+    const std::optional<std::string> vertexSpirv = ReadBindlessMaterialProbeArtifactUVE("vert");
+    const std::optional<std::string> fragmentSpirv = ReadBindlessMaterialProbeArtifactUVE("frag");
+    if (!vertexSpirv.has_value() || !fragmentSpirv.has_value()) {
+        GTEST_SKIP() << "offline bindless_material_probe Vulkan artifacts are not present; "
+                        "build uve_builtin_shader_artifacts first";
+    }
+
+    ShaderDescUVE vertexDesc{};
+    vertexDesc.stage = ShaderStageUVE::Vertex;
+    vertexDesc.sourceCode = *vertexSpirv;
+    ShaderDescUVE fragmentDesc{};
+    fragmentDesc.stage = ShaderStageUVE::Fragment;
+    fragmentDesc.sourceCode = *fragmentSpirv;
+    const ShaderHandleUVE vertexShader = device->CreateShaderUVE(vertexDesc);
+    const ShaderHandleUVE fragmentShader = device->CreateShaderUVE(fragmentDesc);
+    ASSERT_NE(vertexShader, kInvalidShaderHandleUVE);
+    ASSERT_NE(fragmentShader, kInvalidShaderHandleUVE);
+
+    PipelineDescUVE pipelineDesc{};
+    pipelineDesc.vertexShader = vertexShader;
+    pipelineDesc.fragmentShader = fragmentShader;
+    pipelineDesc.vertexStride = 16U; // vec2 position + vec2 UV
+    pipelineDesc.vertexLayout.push_back(VertexAttributeUVE{"POSITION", VertexAttributeFormatUVE::Float2, 0U});
+    pipelineDesc.vertexLayout.push_back(VertexAttributeUVE{"TEXCOORD", VertexAttributeFormatUVE::Float2, 8U});
+    pipelineDesc.depthTestEnabled = false;
+    pipelineDesc.depthWriteEnabled = false;
+    const PipelineHandleUVE pipeline = device->CreatePipelineUVE(pipelineDesc);
+    ASSERT_NE(pipeline, kInvalidPipelineHandleUVE);
+
+    const std::array<std::byte, 16> redPixels = {
+        std::byte{0xFF}, std::byte{0x00}, std::byte{0x00}, std::byte{0xFF},
+        std::byte{0xFF}, std::byte{0x00}, std::byte{0x00}, std::byte{0xFF},
+        std::byte{0xFF}, std::byte{0x00}, std::byte{0x00}, std::byte{0xFF},
+        std::byte{0xFF}, std::byte{0x00}, std::byte{0x00}, std::byte{0xFF},
+    };
+    const std::array<std::byte, 16> greenPixels = {
+        std::byte{0x00}, std::byte{0xFF}, std::byte{0x00}, std::byte{0xFF},
+        std::byte{0x00}, std::byte{0xFF}, std::byte{0x00}, std::byte{0xFF},
+        std::byte{0x00}, std::byte{0xFF}, std::byte{0x00}, std::byte{0xFF},
+        std::byte{0x00}, std::byte{0xFF}, std::byte{0x00}, std::byte{0xFF},
+    };
+    TextureDescUVE textureDesc{};
+    textureDesc.width = 2U;
+    textureDesc.height = 2U;
+    textureDesc.format = TextureFormatUVE::RGBA8Unorm;
+    const TextureHandleUVE redTexture = device->CreateTextureUVE(
+        textureDesc, std::span<const std::byte>(redPixels.data(), redPixels.size()));
+    const TextureHandleUVE greenTexture = device->CreateTextureUVE(
+        textureDesc, std::span<const std::byte>(greenPixels.data(), greenPixels.size()));
+    ASSERT_NE(redTexture, kInvalidTextureHandleUVE);
+    ASSERT_NE(greenTexture, kInvalidTextureHandleUVE);
+    const std::uint32_t redSlot = device->GetBindlessSampledTextureSlotUVE(redTexture);
+    const std::uint32_t greenSlot = device->GetBindlessSampledTextureSlotUVE(greenTexture);
+    ASSERT_NE(redSlot, kInvalidBindlessResourceSlotUVE);
+    ASSERT_NE(greenSlot, kInvalidBindlessResourceSlotUVE);
+    ASSERT_NE(redSlot, greenSlot);
+
+    const float quadVertices[24] = {
+        -1.0F, -1.0F, 0.0F, 0.0F,
+         1.0F, -1.0F, 1.0F, 0.0F,
+         1.0F,  1.0F, 1.0F, 1.0F,
+        -1.0F, -1.0F, 0.0F, 0.0F,
+         1.0F,  1.0F, 1.0F, 1.0F,
+        -1.0F,  1.0F, 0.0F, 1.0F,
+    };
+    BufferDescUVE bufferDesc{};
+    bufferDesc.sizeBytes = sizeof(quadVertices);
+    bufferDesc.usage = BufferUsageUVE::Vertex;
+    const BufferHandleUVE vertexBuffer = device->CreateBufferUVE(
+        bufferDesc,
+        std::span<const std::byte>(reinterpret_cast<const std::byte*>(quadVertices), sizeof(quadVertices)));
+    ASSERT_NE(vertexBuffer, kInvalidBufferHandleUVE);
+
+    const auto renderAndReadCenter = [&](const std::uint32_t textureSlot) {
+        auto commandBuffer = device->CreateCommandBufferUVE();
+        EXPECT_NE(commandBuffer, nullptr);
+        if (commandBuffer == nullptr) {
+            return std::array<int, 4>{0, 0, 0, 0};
+        }
+        RenderPassDescUVE passDesc{};
+        passDesc.colorLoadOp = LoadOpUVE::Clear;
+        passDesc.clearColor = {0.0F, 0.0F, 0.0F, 1.0F};
+        commandBuffer->BeginRenderPassUVE(passDesc);
+        commandBuffer->BindPipelineUVE(pipeline);
+        commandBuffer->BindVertexBufferUVE(vertexBuffer);
+        commandBuffer->SetUniformIntUVE("uTextureIndex", static_cast<std::int32_t>(textureSlot));
+        commandBuffer->DrawUVE(6U);
+        commandBuffer->EndRenderPassUVE();
+        device->SubmitUVE(std::move(commandBuffer));
+        device->PresentUVE();
+        EXPECT_TRUE(device->IsUsableUVE());
+
+        std::vector<std::byte> pixels(1280U * 720U * 4U);
+        std::uint32_t width = 0U;
+        std::uint32_t height = 0U;
+        EXPECT_TRUE(device->ReadbackLatestPresentedImageUVE(pixels, width, height));
+        if (width == 0U || height == 0U || pixels.size() < 4U) {
+            return std::array<int, 4>{0, 0, 0, 0};
+        }
+        const std::size_t center =
+            (static_cast<std::size_t>(height / 2U) * width + width / 2U) * 4U;
+        if (center + 3U >= pixels.size()) {
+            return std::array<int, 4>{0, 0, 0, 0};
+        }
+        return std::array<int, 4>{static_cast<int>(pixels[center]), static_cast<int>(pixels[center + 1U]),
+                                  static_cast<int>(pixels[center + 2U]), static_cast<int>(pixels[center + 3U])};
+    };
+
+    const std::array<int, 4> redCenter = renderAndReadCenter(redSlot);
+    const std::array<int, 4> greenCenter = renderAndReadCenter(greenSlot);
+    EXPECT_GT(redCenter[0], 220) << "red bindless material sample was not rendered: ("
+                                 << redCenter[0] << "," << redCenter[1] << "," << redCenter[2] << ")";
+    EXPECT_LT(redCenter[1], 40);
+    EXPECT_LT(redCenter[2], 40);
+    EXPECT_LT(greenCenter[0], 40) << "green bindless material sample was not selected: ("
+                                  << greenCenter[0] << "," << greenCenter[1] << "," << greenCenter[2] << ")";
+    EXPECT_GT(greenCenter[1], 220);
+    EXPECT_LT(greenCenter[2], 40);
+
+    device->DestroyBufferUVE(vertexBuffer);
+    device->DestroyTextureUVE(redTexture);
+    device->DestroyTextureUVE(greenTexture);
+    device->DestroyPipelineUVE(pipeline);
+    device->DestroyShaderUVE(vertexShader);
+    device->DestroyShaderUVE(fragmentShader);
 }
 
 TEST_F(VulkanRenderDeviceUVETest, ForcedDescriptorIndexingFallbackNeverPublishesNativeSlots) {

@@ -76,6 +76,7 @@ if(UVE_BUILD_BUILTIN_SHADER_ARTIFACTS)
         basic_2d
         basic_3d
         basic_3d_textured
+        bindless_material_probe
         particle
         shadow_depth
         lit_shadowed_3d

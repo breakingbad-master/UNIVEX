@@ -107,7 +107,7 @@ jobs:
                       raise SystemExit(f"{stem}/comp: missing/empty {target} artifact")
 
           for stem in (
-              "basic_2d", "basic_3d", "basic_3d_textured", "particle", "shadow_depth", "lit_shadowed_3d",
+              "basic_2d", "basic_3d", "basic_3d_textured", "bindless_material_probe", "particle", "shadow_depth", "lit_shadowed_3d",
               "fullscreen_quad", "fullscreen_copy", "bloom_bright_pass", "bloom_blur", "ssao", "ui_overlay"
           ):
               for stage in ("vert", "frag"):
@@ -194,6 +194,8 @@ jobs:
           PY
           spirv-cross build/shaders/bindless_probe/comp/bindless_probe.vulkan.spv --reflect \
             > build/shaders/bindless_probe/comp/bindless_probe.reflection.json
+          spirv-cross build/shaders/bindless_material_probe/frag/bindless_material_probe.vulkan.spv --reflect \
+            > build/shaders/bindless_material_probe/frag/bindless_material_probe.reflection.json
           for variant in bindless instanced_bindless; do
             spirv-cross "build/shaders/lit_shadowed_3d/${variant}/frag/lit_shadowed_3d.vulkan.spv" --reflect \
               > "build/shaders/lit_shadowed_3d/${variant}/frag/lit_shadowed_3d.reflection.json"
@@ -201,6 +203,20 @@ jobs:
           python3 - <<'PY'
           import json
           from pathlib import Path
+
+          material_reflection_path = Path(
+              "build/shaders/bindless_material_probe/frag/bindless_material_probe.reflection.json"
+          )
+          material_reflection = json.loads(material_reflection_path.read_text(encoding="utf-8"))
+          material_arrays = [
+              resource for resource in material_reflection.get("textures", [])
+              if resource.get("set") == 1 and resource.get("binding") == 0
+          ]
+          if not any(resource.get("array") == [256] for resource in material_arrays):
+              raise SystemExit(
+                  "bindless_material_probe: set 1 binding 0 is not a 256-element sampled array"
+              )
+          print("Validated real-draw bindless material probe reflection")
 
           reflection_path = Path("build/shaders/bindless_probe/comp/bindless_probe.reflection.json")
           reflection = json.loads(reflection_path.read_text(encoding="utf-8"))

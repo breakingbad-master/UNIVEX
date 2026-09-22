@@ -170,7 +170,10 @@ bindless implementation yet: generated HLSL/MSL still requires the target backen
 compiler and resource-layout validation. `bindless_probe` keeps the 256-entry set-1 contract only
 in its Vulkan-family variants; its OpenGL/GLES/text outputs are bounded compiler smoke fixtures,
 with the GLES probe using a constant element so ES 3.1 does not require a vendor non-uniform-index
-extension. The fallback binding path remains mandatory for low-tier Vulkan, OpenGL/GLES, and any
+extension. `bindless_material_probe` is the graphics companion: CI reflects its Vulkan fragment
+artifact and the real Vulkan suite draws two uploaded textures through different published array
+indices, validating pixels rather than only descriptor metadata. The fallback binding path remains
+mandatory for low-tier Vulkan, OpenGL/GLES, and any
 device whose native descriptor capacity is exhausted.
 
 Current limitations are explicit: the default CMake configure keeps artifact generation off so a

@@ -340,9 +340,10 @@ publicly shipping real-time engines as of today, without naming any of them.
   lit material path now consumes the sampled-texture array when Vulkan capability negotiation and
   the explicit two-stage source marker both succeed; frame diagnostics report bindless versus
   fixed-slot material draws. CI compiles and SPIR-V-validates the B1 fixture and lit bindless
-  variants, reflects their set-1 bindings, runs the focused Vulkan suite with
-  `VK_LAYER_KHRONOS_validation`, and confirms the full test suite remains green. Remaining evidence
-  is real-device material pixel validation, capacity/performance measurements, and native D3D12
+  variants, reflects their set-1 bindings, and the real Vulkan suite now draws a two-texture
+  bindless material probe and checks the selected pixels under the validation layer. CI runs that
+  focused Vulkan suite and confirms the full test suite remains green. Remaining evidence is full
+  lit-scene pixel validation, capacity/performance measurements, and native D3D12
   descriptor heaps plus Metal argument buffers/mobile validation; generic imported-material
   packaging now carries a validated VFS source identity and collision-safe cooked-artifact key from
   the shader importer through Renderer3DUVE and ShaderManagerUVE.
