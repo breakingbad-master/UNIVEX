@@ -256,9 +256,11 @@ publicly shipping real-time engines as of today, without naming any of them.
   SPIRV-Cross JSON reflection checks for the B1 set-1 bindings. The built-in lit material now has an
   explicit, capability-gated `UVE_BINDLESS_MATERIAL_CONTRACT`: Vulkan binds its material textures
   from set 1 while shadow samplers remain in set 0, and unsupported/exhausted devices retain the
-  fixed-slot path. Remaining: platform-native final compilation, hardware validation, and broader
-  runtime artifact packaging; imported `.vert`/`.frag`/`.comp` materials now carry validated VFS
-  source identities and collision-safe cooked-artifact keys through the asset importer and renderer.
+  fixed-slot path. The production Vulkan suite now also loads the generated `lit_shadowed_3d`
+  bindless stages and verifies red/green material pixels through the reflected frame contract.
+  Remaining: platform-native final compilation, broader hardware validation, and broader runtime
+  artifact packaging; imported `.vert`/`.frag`/`.comp` materials now carry validated VFS source
+  identities and collision-safe cooked-artifact keys through the asset importer and renderer.
   Runtime source compilation remains the deterministic fallback where valid.
 - [~] GPU compute-shader support (for culling, particle simulation, skinning, etc. on the
   GPU instead of the CPU) — RHI level completed with M5a (compute pipelines, DispatchUVE,
@@ -341,10 +343,10 @@ publicly shipping real-time engines as of today, without naming any of them.
   the explicit two-stage source marker both succeed; frame diagnostics report bindless versus
   fixed-slot material draws. CI compiles and SPIR-V-validates the B1 fixture and lit bindless
   variants, reflects their set-1 bindings, and the real Vulkan suite now draws a two-texture
-  bindless material probe and checks the selected pixels under the validation layer. CI runs that
-  focused Vulkan suite and confirms the full test suite remains green. Remaining evidence is full
-  lit-scene pixel validation, capacity/performance measurements, and native D3D12
-  descriptor heaps plus Metal argument buffers/mobile validation; generic imported-material
+  bindless material probe plus the generated production `lit_shadowed_3d` stages, checking selected
+  red/green pixels under the validation layer. CI runs that focused Vulkan suite and confirms the
+  full test suite remains green. Remaining evidence is capacity/performance measurements, native
+  D3D12 descriptor heaps, and Metal argument buffers/mobile validation; generic imported-material
   packaging now carries a validated VFS source identity and collision-safe cooked-artifact key from
   the shader importer through Renderer3DUVE and ShaderManagerUVE.
 

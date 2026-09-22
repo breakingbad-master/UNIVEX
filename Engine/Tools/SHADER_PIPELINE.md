@@ -172,9 +172,11 @@ in its Vulkan-family variants; its OpenGL/GLES/text outputs are bounded compiler
 with the GLES probe using a constant element so ES 3.1 does not require a vendor non-uniform-index
 extension. `bindless_material_probe` is the graphics companion: CI reflects its Vulkan fragment
 artifact and the real Vulkan suite draws two uploaded textures through different published array
-indices, validating pixels rather than only descriptor metadata. The fallback binding path remains
-mandatory for low-tier Vulkan, OpenGL/GLES, and any
-device whose native descriptor capacity is exhausted.
+indices, validating pixels rather than only descriptor metadata. The same suite also loads the
+generated `lit_shadowed_3d` bindless stages, supplies the reflected frame and material values,
+and verifies red and green center pixels through the production lit-material contract. The fallback
+binding path remains mandatory for low-tier Vulkan, OpenGL/GLES, and any device whose native
+descriptor capacity is exhausted.
 
 Current limitations are explicit: the default CMake configure keeps artifact generation off so a
 Null/OpenGL-only checkout does not require every compiler and SDK. Release/CI configs can enable
